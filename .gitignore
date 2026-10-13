@@ -1,0 +1,6 @@
+__pycache__/
+*.db
+evidence_store/
+.pytest_cache/
+data/
+reports/amazon_images/

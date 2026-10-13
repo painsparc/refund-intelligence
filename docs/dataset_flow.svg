@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 330" font-family="Arial, Helvetica, sans-serif">
+  <defs><marker id="a" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#0b6fa4"/></marker></defs>
+  <text x="20" y="32" font-size="22" font-weight="bold" fill="#0b6fa4">Dataset preparation flow (offline, separate from the real-time graph)</text>
+  <g font-size="14" fill="#222">
+    <rect x="20" y="70" width="190" height="190" rx="12" fill="#f1f3f5" stroke="#9aa5b1"/>
+    <text x="115" y="95" text-anchor="middle" font-weight="bold">Public datasets</text>
+    <text x="35" y="125">Olist (orders, sellers)</text><text x="35" y="150">UCI Online Retail II</text>
+    <text x="35" y="175">Amazon Reviews 2023</text><text x="35" y="200">INRIA Copydays</text>
+    <text x="35" y="235" font-size="12" fill="#a33">no refund / fraud labels</text>
+
+    <rect x="260" y="70" width="190" height="190" rx="12" fill="#eaf3fb" stroke="#0b6fa4"/>
+    <text x="355" y="95" text-anchor="middle" font-weight="bold">Source-specific</text><text x="355" y="113" text-anchor="middle" font-weight="bold">ingestion + mapping</text>
+    <text x="275" y="145" font-size="12">unified schema + provenance</text><text x="275" y="165" font-size="12">cancellations = proxy only</text>
+    <text x="275" y="185" font-size="12">review images != evidence</text><text x="275" y="205" font-size="12">assumed policy flagged</text>
+
+    <rect x="500" y="70" width="190" height="190" rx="12" fill="#eaf3fb" stroke="#0b6fa4"/>
+    <text x="595" y="95" text-anchor="middle" font-weight="bold">Component-level</text><text x="595" y="113" text-anchor="middle" font-weight="bold">evaluation data</text>
+    <text x="515" y="145" font-size="12">gate  &#8592; Olist</text><text x="515" y="165" font-size="12">behaviour &#8592; UCI</text>
+    <text x="515" y="185" font-size="12">evidence reuse &#8592; Copydays</text><text x="515" y="205" font-size="12">claim text &#8592; Amazon</text>
+
+    <rect x="740" y="70" width="190" height="190" rx="12" fill="#fff6e0" stroke="#f0a000"/>
+    <text x="835" y="95" text-anchor="middle" font-weight="bold">Controlled abuse</text><text x="835" y="113" text-anchor="middle" font-weight="bold">scenarios + labels</text>
+    <text x="755" y="145" font-size="12">serial refunder, farming,</text><text x="755" y="165" font-size="12">policy exploitation,</text>
+    <text x="755" y="185" font-size="12">evidence reuse, controls</text><text x="755" y="215" font-size="12" fill="#a33">SYNTHETIC, seeded</text>
+
+    <rect x="980" y="70" width="200" height="190" rx="12" fill="#e9f6ec" stroke="#1e8e3e"/>
+    <text x="1080" y="95" text-anchor="middle" font-weight="bold">Evaluation results</text>
+    <text x="995" y="145" font-size="12">eval_results.json</text><text x="995" y="165" font-size="12">eval_report.md</text>
+    <text x="995" y="185" font-size="12">dataset_manifest.md</text><text x="995" y="215" font-size="12">actual counts, no hand-typed numbers</text>
+  </g>
+  <g stroke="#0b6fa4" stroke-width="2.5" marker-end="url(#a)"><line x1="212" y1="165" x2="256" y2="165"/><line x1="452" y1="165" x2="496" y2="165"/><line x1="692" y1="165" x2="736" y2="165"/><line x1="932" y1="165" x2="976" y2="165"/></g>
+</svg>
