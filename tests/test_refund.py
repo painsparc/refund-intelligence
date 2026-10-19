@@ -9,7 +9,7 @@ import tempfile
 TMP = tempfile.mkdtemp()
 os.environ["DATABASE_URL"] = f"sqlite:///{TMP}/test.db"
 os.environ["EVIDENCE_DIR"] = f"{TMP}/evidence"
-os.environ.pop("ANTHROPIC_API_KEY", None)
+os.environ.pop("LLM_API_KEY", None)
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -309,3 +309,174 @@ def test_architecture_rules():
     assert sorted(n for n in dir(ai) if n.endswith("_agent")) == ["behaviour_abuse_agent", "evidence_claim_agent", "resolution_agent"]
     assert list(ai.abuse_pattern_counts()) == ai.ABUSE_PATTERNS
     assert ai.ALL_ACTIONS == ["auto_approve", "refund_after_return", "request_evidence", "manual_review", "policy_decline"]
+
+
+# ------------------------------------------------------------------ claim NLP: negation, paraphrase, pluggable transformer
+@pytest.fixture()
+def reset_nlp():
+    yield
+    ai.set_text_classifier(None)
+    ai.set_sentiment_scorer(None)
+    ai.set_image_text_scorer(None)
+    ai._NLP.update(fn=None, tried=False, backend="rules")
+
+
+def test_negation_is_understood():
+    aff, neg = ai.rule_categories("It is not damaged, I just do not want it anymore.")
+    assert "damaged" not in aff and "damaged" in neg and "changed_mind" in aff
+    assert ai.rule_categories("The box is not broken but the charger does not work.") == (["defective"], ["damaged"])
+    assert ai.rule_categories("No damage at all, works great.") == ([], ["damaged"])
+    assert ai.rule_categories("The jar arrived cracked at the base.") == (["damaged"], [])
+    assert ai.rule_categories("Parcel never arrived.")[0] == ["not_delivered"]               # phrases that embed a negation are positive
+    i = ai.interpret_claim(claim("ORD-1001", "C001", "damaged", desc="No damage at all, works great, but I would like to return it."))
+    assert "claim_negated_by_text" in i["ambiguity_flags"] and i["ambiguity"] == 50
+    j = ai.interpret_claim(claim("ORD-1001", "C001", "damaged", desc="It is not damaged, I just do not want it anymore."))
+    assert "reason_description_mismatch" in j["ambiguity_flags"]
+    assert ai.interpret_claim(claim("ORD-1001", "C001", "damaged", desc="The handle snapped off the first time I used it."))["ambiguity"] == 0
+
+
+def test_transformer_backend_is_pluggable(reset_nlp):
+    c = claim("ORD-1001", "C001", "damaged", desc="The ceramic mug came in two pieces.")
+    assert ai.interpret_claim(c)["ambiguity_flags"] == []                                        # rules: no keyword -> no flag, no match
+    assert ai.interpret_claim(c)["text_categories"] == []
+    ai.set_text_classifier(lambda t: {"damaged": 0.93, "defective": 0.05, "changed_mind": 0.01})
+    out = ai.interpret_claim(c)
+    assert out["nlp_backend"] == "injected" and out["text_categories"] == ["damaged"] and out["ambiguity"] == 0
+    ai.set_text_classifier(lambda t: {"changed_mind": 0.9, "damaged": 0.1})                       # model says the customer changed their mind
+    out = ai.interpret_claim(c)
+    assert "reason_description_mismatch" in out["ambiguity_flags"]
+    assert ai.classify_text_category("anything")[1] == "injected"
+
+
+def test_transformer_failure_falls_back_to_rules(monkeypatch, reset_nlp):
+    monkeypatch.setenv("CLAIM_NLP", "transformer")
+    monkeypatch.setitem(sys.modules, "transformers", None)                                       # simulate: model library not installed
+    ai._NLP.update(fn=None, tried=False, backend="rules")
+    out = ai.interpret_claim(claim("ORD-1001", "C001", "damaged", desc="The jar arrived cracked at the base."))
+    assert out["nlp_backend"] == "rules" and out["ambiguity"] == 0
+
+
+# ------------------------------------------------------------------ sentiment: customer experience only, never a fraud signal
+def test_sentiment_labels(reset_nlp):
+    assert ai.sentiment("I am absolutely furious, this is a disgrace!")["label"] == "negative"
+    assert ai.sentiment("")["label"] == "neutral"
+    ai.set_sentiment_scorer(lambda t: 0.9)
+    assert ai.sentiment("whatever") == {"score": 0.9, "label": "positive", "backend": "injected"}
+
+
+def test_sentiment_never_changes_risk_or_decision(reset_nlp):
+    calm = claim("ORD-1002", "C003", "damaged", 2890, desc="Hi team, the kettle arrived broken and cracked. Could you please help? Many thanks!")
+    angry = claim("ORD-1002", "C003", "damaged", 2890, desc="I am absolutely furious, this kettle is broken and cracked, a disgrace and terrible!")
+    f = ai.build_features(calm, db.get_order("ORD-1002"))
+    outs = []
+    for c in (calm, angry):
+        ev = ai.evidence_claim_agent(c, OK_GATE, GOOD_EVIDENCE)
+        beh = ai.behaviour_abuse_agent(c, f, GOOD_EVIDENCE)
+        risk = ai.synthesize_risk(ev, beh)
+        outs.append((ev["components"], risk, ai.expected_cost_decision(c, OK_GATE, risk, beh, GOOD_EVIDENCE), ev["sentiment"]["score"]))
+    assert outs[0][:3] == outs[1][:3]                                  # identical components, risk scores, costs and action
+    assert outs[1][3] < outs[0][3] - 0.3                                # ... even though the sentiment differs a lot
+    assert ai.cx_priority({"score": -0.8}, 80, "manual_review") is True
+    assert ai.cx_priority({"score": -0.8}, 80, "auto_approve") is False
+    assert ai.cx_priority({"score": -0.8}, 20, "manual_review") is False  # low-trust customers are not 'priority care'
+    assert ai.cx_priority({"score": -0.1}, 80, "manual_review") is False
+
+
+def test_cx_routing_end_to_end(reset_nlp):
+    r = process_claim(claim("ORD-1005", "C002", "damaged", 1800, desc="I am absolutely furious, this sleeve is broken and torn, terrible and a disgrace!",
+                            cid="CLM-cx"), None)
+    assert r["decision"] != "auto_approve" and r["cx_priority"] is True and r["sentiment"]["label"] == "negative"
+    row = db.q1("SELECT sentiment, cx_priority FROM refund_requests WHERE id='CLM-cx'")
+    assert row["cx_priority"] == 1 and row["sentiment"] < -0.5
+    assert db.q1("SELECT COUNT(*) AS n FROM action_log WHERE action='cx_priority'")["n"] == 1
+    assert "cx_priority" not in r["flags"] and "sentiment" not in " ".join(r["flags"])             # not a risk flag
+    assert ai.management_view()["customer_experience"]["cx_priority_claims"] == 1
+
+
+# ------------------------------------------------------------------ image matching: pHash + ORB catch what average-hash misses
+def _variants(raw):
+    from PIL import Image
+    import io
+    im = Image.open(io.BytesIO(raw)).convert("RGB")
+    dx, dy = int(im.width * .12), int(im.height * .12)
+    crop = im.crop((dx, dy, im.width - dx, im.height - dy))
+    out = io.BytesIO()
+    crop.save(out, "JPEG", quality=85)
+    small = io.BytesIO()
+    im.resize((int(im.width * .6), int(im.height * .6))).save(small, "JPEG", quality=80)
+    return out.getvalue(), small.getvalue()
+
+
+def test_phash_and_orb_signatures_and_methods():
+    pytest.importorskip("cv2")
+    raw = make_image(5)
+    sig = ai.image_signature(raw)
+    assert len(sig["phash"]) == 16 and sig["orb"] and sig["orb"]["k"]
+    cropped, resized = _variants(raw)
+    m_crop = ai.similarity_methods(ai.image_signature(cropped), sig)
+    assert "orb" in m_crop and "ahash" not in m_crop                         # a crop: only local features see it (average hash misses it)
+    assert {"phash", "ahash"} & set(ai.similarity_methods(ai.image_signature(resized), sig))   # a resize: the hashes still agree
+    assert ai.similarity_methods(ai.image_signature(make_image(77)), sig) == []                 # a different picture
+
+
+def test_cropped_reuse_is_detected_across_customers():
+    pytest.importorskip("cv2")
+    raw = make_image(2)
+    process_claim(claim("ORD-1002", "C003", "defective", 2890, cid="CLM-orig"), raw)
+    cropped, _ = _variants(raw)
+    ev = ai.evidence_match(cropped, claim("ORD-1004", "C005", cid="CLM-other"))
+    assert ev["similar_reuse_other_customer"] and "orb" in ev["match_methods"] and not ev["exact_reuse_other_customer"]
+    stored = db.q1("SELECT phash, orb FROM evidence WHERE claim_id='CLM-orig'")
+    assert stored["phash"] and stored["orb"]
+
+
+def test_text_image_consistency_hook(reset_nlp):
+    raw = make_image(1)
+    c = claim("ORD-1001", "C001", "damaged", 3500, desc="The jar arrived cracked at the base.")
+    ev = ai.evidence_match(raw, c)
+    assert ev["text_image_consistency"] is None                                                   # CLIP is off by default
+    base = ai.evidence_inconsistency(c, ev)
+    ai.set_image_text_scorer(lambda image_bytes, category: 0.1)                                   # the photo does NOT look damaged
+    ev = ai.evidence_match(raw, c)
+    assert ev["text_image_consistency"] == 0.1 and ai.evidence_inconsistency(c, ev) >= 90 > base
+    assert "image_text_mismatch" in ai.evidence_claim_agent(c, OK_GATE, ev)["flags"]
+    ai.set_image_text_scorer(lambda image_bytes, category: 0.95)                                  # the photo looks as claimed
+    ev = ai.evidence_match(raw, c)
+    assert ai.evidence_inconsistency(c, ev) == max(base, 5.0)                                      # 100*(1-0.95): a consistent photo adds nothing material
+    calls = []
+    ai.set_image_text_scorer(lambda image_bytes, category: calls.append(1) or 0.5)
+    ai.evidence_match(raw, claim("ORD-1001", "C001", "changed_mind"))
+    assert calls == []                                                                           # only physical-condition claims are checked
+
+
+# ------------------------------------------------------------------ provider-neutral LLM layer
+def test_llm_is_optional_bounded_and_provider_neutral(monkeypatch, reset_nlp):
+    assert ai.llm_json("sys", {"x": 1}) is None                                              # not configured -> deterministic only
+    c = claim("ORD-1001", "C001", "damaged", 2000, desc="The jar arrived cracked at the base.")
+    base = ai.synthesize_risk(ai.evidence_claim_agent(c, OK_GATE, NO_EVIDENCE), {"abuse_patterns": [], "behaviour_risk": 0.0, "components": {}})
+    # (a) injected provider
+    ai.set_llm(lambda system, payload, image: {"risk_adjustment": 50, "flags": ["looks_staged"], "summary": "provider says so"})
+    try:
+        out = ai.evidence_claim_agent(c, OK_GATE, NO_EVIDENCE)
+        assert out["llm_adjustment"] == 10 and "looks_staged" in out["flags"]                 # +50 is clipped to +10 points
+        assert ai.synthesize_risk(out, {"abuse_patterns": [], "behaviour_risk": 0.0, "components": {}})["claim_risk"] == base["claim_risk"] + 10
+        ai.set_llm(lambda *a: (_ for _ in ()).throw(RuntimeError("provider down")))
+        assert ai.evidence_claim_agent(c, OK_GATE, NO_EVIDENCE)["llm_adjustment"] == 0        # a failing provider changes nothing
+    finally:
+        ai.set_llm(None)
+    # (b) generic OpenAI-compatible HTTP endpoint (mocked)
+    seen = {}
+
+    class Resp:
+        def raise_for_status(self): pass
+        def json(self): return {"choices": [{"message": {"content": 'noise {"risk_adjustment": -3, "summary": "ok"} noise'}}]}
+
+    def fake_post(url, headers, json, timeout):
+        seen.update(url=url, auth=headers["Authorization"], model=json["model"], roles=[m["role"] for m in json["messages"]])
+        return Resp()
+    import requests
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_BASE_URL", "https://llm.example.test/v1/")
+    assert ai.llm_json("sys", {"x": 1}) == {"risk_adjustment": -3, "summary": "ok"}
+    assert seen["url"] == "https://llm.example.test/v1/chat/completions" and seen["auth"] == "Bearer test-key" and seen["roles"] == ["system", "user"]

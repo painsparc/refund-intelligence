@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-10-13T02:12:23",
-  "database": "sqlite:////tmp/fx2/e.db",
+  "generated_at": "2026-10-18T16:25:37",
+  "database": "sqlite:////tmp/fx4/e.db",
   "gate_on_olist_orders": {
     "status": "run",
     "data": "Olist (real order timestamps, categories, amounts) + ASSUMED policy + synthetic claim timing",
@@ -50,31 +50,50 @@
     "data": "INRIA Copydays (source-provided ground truth: variant -> original)",
     "originals": 6,
     "variants": 12,
-    "operating_threshold": 5,
+    "orb_available": true,
+    "operating_thresholds": {
+      "ahash": 5,
+      "phash": 8,
+      "orb_inliers": 40
+    },
     "by_variant_type": {
       "crop": {
         "n": 6,
-        "top1_accuracy": 1.0,
-        "recall@hamming<=3": 0.0,
-        "recall@hamming<=5": 0.0,
-        "recall@hamming<=8": 0.0,
-        "recall@hamming<=12": 0.0,
-        "false_match_rate@hamming<=3": 0.0,
-        "false_match_rate@hamming<=5": 0.0,
-        "false_match_rate@hamming<=8": 0.0,
-        "false_match_rate@hamming<=12": 0.0
+        "recall ahash<=5": 0.0,
+        "false-match rate ahash<=5": 0.0,
+        "recall phash<=6": 0.0,
+        "false-match rate phash<=6": 0.0,
+        "recall phash<=8": 0.0,
+        "false-match rate phash<=8": 0.0,
+        "recall phash<=12": 0.0,
+        "false-match rate phash<=12": 0.0,
+        "recall orb>=25": 1.0,
+        "false-match rate orb>=25": 0.033333,
+        "recall orb>=40": 1.0,
+        "false-match rate orb>=40": 0.0,
+        "recall orb>=60": 1.0,
+        "false-match rate orb>=60": 0.0,
+        "recall combined (system rule)": 1.0,
+        "false-match rate combined (system rule)": 0.0
       },
       "jpeg": {
         "n": 6,
-        "top1_accuracy": 1.0,
-        "recall@hamming<=3": 1.0,
-        "recall@hamming<=5": 1.0,
-        "recall@hamming<=8": 1.0,
-        "recall@hamming<=12": 1.0,
-        "false_match_rate@hamming<=3": 0.0,
-        "false_match_rate@hamming<=5": 0.0,
-        "false_match_rate@hamming<=8": 0.0,
-        "false_match_rate@hamming<=12": 0.0
+        "recall ahash<=5": 1.0,
+        "false-match rate ahash<=5": 0.0,
+        "recall phash<=6": 1.0,
+        "false-match rate phash<=6": 0.0,
+        "recall phash<=8": 1.0,
+        "false-match rate phash<=8": 0.0,
+        "recall phash<=12": 1.0,
+        "false-match rate phash<=12": 0.0,
+        "recall orb>=25": 1.0,
+        "false-match rate orb>=25": 0.0,
+        "recall orb>=40": 1.0,
+        "false-match rate orb>=40": 0.0,
+        "recall orb>=60": 1.0,
+        "false-match rate orb>=60": 0.0,
+        "recall combined (system rule)": 1.0,
+        "false-match rate combined (system rule)": 0.0
       }
     },
     "original_quality_score": {
@@ -82,105 +101,202 @@
       "p50": 1.0,
       "p90": 1.0
     },
-    "note": "average-hash is cheap but weak on crops / strong edits; the sweep shows the trade-off"
+    "note": "aHash is cheap but brittle; pHash survives resize/recompression/blur; ORB local-feature matching is what catches crops. Calibrate the thresholds on these numbers; Copydays are holiday photos, so check false matches again on real product photos."
   },
   "abuse_scenarios_synthetic": {
     "status": "run",
-    "data": "SYNTHETIC labelled scenarios (seeded) on top of real order attributes where available",
-    "scenarios": {
+    "data": "SYNTHETIC labelled customers drawn from independent behavioural profiles, real order attributes where available",
+    "profiles": {
+      "normal": {
+        "abusive": 0,
+        "n": 20,
+        "intervention_rate": 0.0,
+        "any_pattern_flag_rate": 0.05
+      },
+      "heavy_legit": {
+        "abusive": 0,
+        "n": 20,
+        "intervention_rate": 0.0,
+        "any_pattern_flag_rate": 0.0
+      },
       "serial_refunder": {
-        "label": "abusive_claim",
-        "n": 12,
-        "intervention_rate(not auto-approved)": 0.0,
-        "auto_approve_rate": 1.0,
-        "any_abuse_flag_rate": 1.0,
-        "target_detection_rate": 1.0
+        "abusive": 1,
+        "n": 20,
+        "intervention_rate": 0.0,
+        "any_pattern_flag_rate": 0.3,
+        "target_pattern": "serial_refunder",
+        "target_pattern_recall": 0.25
       },
-      "refund_farming": {
-        "label": "abusive_claim",
-        "n": 12,
-        "intervention_rate(not auto-approved)": 0.0,
-        "auto_approve_rate": 1.0,
-        "any_abuse_flag_rate": 1.0,
-        "target_detection_rate": 1.0
+      "refund_farmer": {
+        "abusive": 1,
+        "n": 20,
+        "intervention_rate": 0.0,
+        "any_pattern_flag_rate": 0.55,
+        "target_pattern": "refund_farming",
+        "target_pattern_recall": 0.55
       },
-      "policy_exploitation": {
-        "label": "abusive_claim",
-        "n": 12,
-        "intervention_rate(not auto-approved)": 0.0,
-        "auto_approve_rate": 1.0,
-        "any_abuse_flag_rate": 1.0,
-        "target_detection_rate": 1.0
+      "policy_exploiter": {
+        "abusive": 1,
+        "n": 20,
+        "intervention_rate": 0.0,
+        "any_pattern_flag_rate": 0.55,
+        "target_pattern": "policy_exploitation",
+        "target_pattern_recall": 0.55
       },
-      "legit_control": {
-        "label": "legitimate_claim",
-        "n": 12,
-        "intervention_rate(not auto-approved)": 0.0,
-        "auto_approve_rate": 1.0,
-        "any_abuse_flag_rate": 0.0
-      },
-      "near_miss_serial": {
-        "label": "legitimate_claim",
-        "n": 12,
-        "intervention_rate(not auto-approved)": 0.0,
-        "auto_approve_rate": 1.0,
-        "any_abuse_flag_rate": 0.0,
-        "wrongly_flagged_serial_refunder_rate": 0.0
+      "return_abuser": {
+        "abusive": 1,
+        "n": 20,
+        "intervention_rate": 0.0,
+        "any_pattern_flag_rate": 0.4,
+        "target_pattern": "return_abuse",
+        "target_pattern_recall": 0.4
       },
       "evidence_reuse": {
-        "label": "reused_evidence",
-        "n": 12,
-        "intervention_rate(not auto-approved)": 0.0,
-        "auto_approve_rate": 1.0,
-        "any_abuse_flag_rate": 0.75,
-        "target_detection_rate": 0.75,
-        "detection_by_transformation": {
+        "abusive": 1,
+        "n": 20,
+        "intervention_rate": 0.0,
+        "any_pattern_flag_rate": 1.0,
+        "reuse_flag_recall": 1.0,
+        "recall_by_transformation": {
+          "blur": 1.0,
+          "crop": 1.0,
           "jpeg": 1.0,
           "resize": 1.0,
-          "crop": 0.0,
-          "blur": 1.0
-        }
+          "strong": 1.0
+        },
+        "detected_by_orb_only": 0.3
       }
     },
-    "intervention_rate_vs_cost_scale": {
-      "handling/friction cost x1.0": {
+    "false_flags_on_legitimate_profiles": {
+      "normal": {
         "serial_refunder": 0.0,
+        "return_abuse": 0.0,
+        "fake_defect_pattern": 0.05,
         "refund_farming": 0.0,
         "policy_exploitation": 0.0,
-        "legit_control": 0.0,
-        "near_miss_serial": 0.0,
-        "evidence_reuse": 0.0
+        "any_reuse_flag": 0.05
       },
-      "handling/friction cost x0.5": {
-        "serial_refunder": 1.0,
-        "refund_farming": 1.0,
+      "heavy_legit": {
+        "serial_refunder": 0.0,
+        "return_abuse": 0.0,
+        "fake_defect_pattern": 0.0,
+        "refund_farming": 0.0,
         "policy_exploitation": 0.0,
-        "legit_control": 0.0,
-        "near_miss_serial": 0.0,
-        "evidence_reuse": 0.1667
-      },
-      "handling/friction cost x0.2": {
-        "serial_refunder": 1.0,
-        "refund_farming": 1.0,
-        "policy_exploitation": 1.0,
-        "legit_control": 0.0,
-        "near_miss_serial": 0.0,
-        "evidence_reuse": 0.5
-      },
-      "handling/friction cost x0.1": {
-        "serial_refunder": 1.0,
-        "refund_farming": 1.0,
-        "policy_exploitation": 1.0,
-        "legit_control": 0.0,
-        "near_miss_serial": 1.0,
-        "evidence_reuse": 0.75
+        "any_reuse_flag": 0.0
       }
     },
-    "note": "synthetic and rule-aligned by construction: this verifies the pipeline end to end and the evidence-reuse robustness; it is NOT an estimate of real-world fraud detection performance. The expected-cost matrix is in ONE currency unit (handling 100, auto-approve limit 300 here): small claims are auto-approved when review costs more than the exposure, so set COST_SCALE to the deployment's currency/claim size (see the sensitivity table)."
+    "pattern_flag_as_classifier (any abuse pattern or evidence-reuse flag)": {
+      "tp": 56,
+      "fp": 1,
+      "fn": 44,
+      "tn": 39,
+      "precision": 0.982,
+      "recall": 0.56,
+      "false_positive_rate": 0.025,
+      "f1": 0.713
+    },
+    "decision_as_classifier_vs_cost_scale": {
+      "handling/friction cost x1.0": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 100,
+        "tn": 40,
+        "precision": 0.0,
+        "recall": 0.0,
+        "false_positive_rate": 0.0,
+        "f1": 0.0
+      },
+      "handling/friction cost x0.5": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 98,
+        "tn": 40,
+        "precision": 1.0,
+        "recall": 0.02,
+        "false_positive_rate": 0.0,
+        "f1": 0.039
+      },
+      "handling/friction cost x0.2": {
+        "tp": 19,
+        "fp": 1,
+        "fn": 81,
+        "tn": 39,
+        "precision": 0.95,
+        "recall": 0.19,
+        "false_positive_rate": 0.025,
+        "f1": 0.317
+      },
+      "handling/friction cost x0.1": {
+        "tp": 55,
+        "fp": 4,
+        "fn": 45,
+        "tn": 36,
+        "precision": 0.932,
+        "recall": 0.55,
+        "false_positive_rate": 0.1,
+        "f1": 0.692
+      }
+    },
+    "note": "the generator describes HOW customers behave and never references a detection threshold, so the system can miss abusers (recall < 1) and flag heavy genuine customers (false positives > 0). Still synthetic: it shows how the pipeline separates profiles, not real-world fraud performance. Decisions depend on the cost matrix scale (handling 100, limit 300 here); see the table by cost scale and set COST_SCALE for the deployment."
+  },
+  "claim_nlp_on_labelled_set": {
+    "status": "run",
+    "data": "hand-labelled claim texts (see data/README.md for who labelled them)",
+    "sets": {
+      "developer-authored set": {
+        "n": 60,
+        "legacy substring keywords | category_accuracy": 0.45,
+        "legacy substring keywords | category_macro_F1": 0.519,
+        "legacy substring keywords | accuracy_negation_cases": 0.091,
+        "legacy substring keywords | accuracy_paraphrase_cases": 0.0,
+        "legacy substring keywords | accuracy_hard_cases": 0.214,
+        "legacy substring keywords | unsupported-claim detection precision": 0.303,
+        "legacy substring keywords | unsupported-claim detection recall": 0.625,
+        "rules (negation-aware, current default) | category_accuracy": 0.733,
+        "rules (negation-aware, current default) | category_macro_F1": 0.77,
+        "rules (negation-aware, current default) | accuracy_negation_cases": 0.636,
+        "rules (negation-aware, current default) | accuracy_paraphrase_cases": 1.0,
+        "rules (negation-aware, current default) | accuracy_hard_cases": 0.214,
+        "rules (negation-aware, current default) | unsupported-claim detection precision": 0.577,
+        "rules (negation-aware, current default) | unsupported-claim detection recall": 0.938,
+        "sentiment | backend": "vader (English only)",
+        "sentiment | accuracy_3class": 0.4,
+        "sentiment | recall_of_negative": 0.216
+      }
+    },
+    "claim_nlp_backend_active": "rules (transformer not enabled / not loadable)",
+    "note": "the developer-authored set is a regression/sanity set, not an independent benchmark (the same person wrote the rules). A transformer backend is evaluated here only when CLAIM_NLP=transformer loads; text sentiment is English-only with the default lexicon. team labels of real reviews: file data/manual_labels_real.csv not found"
+  },
+  "olist_reviews_real_orders": {
+    "status": "run",
+    "data": "Olist order reviews (real text and scores) linked to real Olist orders",
+    "reviews": 33,
+    "linked_to_orders": 33,
+    "with_comment_text": 2,
+    "score_distribution": {
+      "1": 5,
+      "5": 28
+    },
+    "share_1_2_stars": 0.152,
+    "product_negative_review_outliers": {},
+    "vendor_negative_review_outliers": {
+      "s0": {
+        "reviews": 11,
+        "negative_review_rate": 0.455,
+        "avg_score": 3.18
+      }
+    },
+    "note": "Olist review text is Portuguese: the default sentiment lexicon and rule classifier are English-only, so text-level NLP is NOT evaluated on it (set SENTIMENT_MODEL / CLAIM_NLP_MODEL to multilingual models to do so). Review scores are real and are used for the product/vendor insights. A low review is not a refund claim, and it is never used as a fraud signal."
   },
   "amazon_text_proxy": {
     "status": "run",
     "data": "Amazon Reviews 2023 (REVIEWS, not refund claims) - text/rating proxy",
+    "sentiment_vs_rating": {
+      "reviews_used": 2,
+      "sign_agrees_with_rating": 1.0,
+      "backend": "vader (English only)",
+      "label": "WEAK label: star rating (<=2 negative, >=4 positive); not a human sentiment label"
+    },
     "reviews": 3,
     "with_images": 1,
     "rating_le_2": 2,

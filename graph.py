@@ -82,10 +82,13 @@ def execute_node(s):
     action = d["action"]
     status = STATUS[action]
     flags = sorted(set(eo["flags"] + bo["signals"] + d["forced"]))
+    sent = eo["sentiment"]
+    cxp = ai.cx_priority(sent, rk["trust_index"], action)      # customer-experience routing only; never feeds a score or the decision
     row = dict(order_id=c["order_id"], customer_id=c["customer_id"], reason=c["reason"], amount=c["amount"],
                description=c.get("description", ""), claim_risk=rk["claim_risk"], behaviour_risk=rk["behaviour_risk"],
                trust_index=rk["trust_index"], evidence_confidence=eo["evidence_confidence"], exposure_risk=d["exposure_risk"],
                decision=action, costs=json.dumps(d["costs"]), flags=json.dumps(flags), rationale=d["rationale"], status=status,
+               sentiment=sent["score"], sentiment_label=sent["label"], cx_priority=int(cxp),
                components=json.dumps({"claim_risk": rk["claim_components"], "behaviour_risk": rk["behaviour_components"],
                                       "cost_breakdown": d["cost_breakdown"], "llm_adjustment": {
                                           "claim": eo["llm_adjustment"], "behaviour": bo["llm_adjustment"]}}))
@@ -100,7 +103,7 @@ def execute_node(s):
         Image.open(io.BytesIO(s["image"])).convert("RGB").save(path, "JPEG")
         db.run("DELETE FROM evidence WHERE claim_id=:c", c=c["id"])
         db.insert("evidence", id=db.uid("EV"), claim_id=c["id"], customer_id=c["customer_id"], path=path, sha256=ev["sha256"],
-                  ahash=ev["ahash"], width=ev["width"], height=ev["height"], quality=ev["quality"], created_at=db.now())
+                  ahash=ev["ahash"], phash=ev["phash"], orb=json.dumps(ev["orb"]) if ev["orb"] else None, width=ev["width"], height=ev["height"], quality=ev["quality"], created_at=db.now())
 
     db.run("DELETE FROM risk_signals WHERE claim_id=:c", c=c["id"])  # claim / behaviour risk signals
     for flag in eo["flags"]:
@@ -120,6 +123,8 @@ def execute_node(s):
         db.decline_refund(c, "; ".join(v.replace("policy:", "") for v in d["forced"] if v.startswith("policy:")))
     else:
         case_id = db.open_review_case(c["id"])
+    if cxp:
+        db.flag_cx_priority(c["id"])
     db.audit(c["id"], "decision", f"{action} claim_risk={rk['claim_risk']} behaviour_risk={rk['behaviour_risk']}")
 
     db.run("DELETE FROM behaviour_features WHERE customer_id=:c", c=c["customer_id"])   # behaviour feature table
@@ -135,7 +140,9 @@ def execute_node(s):
     return {"result": {"claim_id": c["id"], "decision": action, "status": status, "claim_risk": rk["claim_risk"],
                        "behaviour_risk": rk["behaviour_risk"], "trust_index": rk["trust_index"], "exposure_risk": d["exposure_risk"],
                        "evidence_confidence": eo["evidence_confidence"], "costs": d["costs"], "cost_breakdown": d["cost_breakdown"],
-                       "abuse_patterns": bo["abuse_patterns"], "flags": flags, "rationale": d["rationale"], "review_case_id": case_id}}
+                       "abuse_patterns": bo["abuse_patterns"], "flags": flags, "rationale": d["rationale"], "review_case_id": case_id,
+                       "sentiment": sent, "cx_priority": cxp, "nlp_backend": eo["nlp_backend"],
+                       "match_methods": ev.get("match_methods", [])}}
 
 
 # ---- wiring --------------------------------------------------------------------------------------
@@ -177,7 +184,8 @@ def fallback_manual_review(claim, error):
     db.audit(claim["id"], "system_error", f"{type(error).__name__}: {error}")
     return {"claim_id": claim["id"], "decision": "manual_review", "status": "under_review", "claim_risk": None, "behaviour_risk": None,
             "trust_index": None, "exposure_risk": None, "evidence_confidence": None, "costs": {}, "cost_breakdown": {},
-            "abuse_patterns": [], "flags": flags, "rationale": row["rationale"], "review_case_id": case_id}
+            "abuse_patterns": [], "flags": flags, "rationale": row["rationale"], "review_case_id": case_id,
+            "sentiment": None, "cx_priority": False, "nlp_backend": None, "match_methods": []}
 
 
 def process_claim(claim, image_bytes=None, resubmission=False):

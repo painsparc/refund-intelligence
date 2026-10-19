@@ -9,7 +9,7 @@ The FIVE MVP CONTRIBUTIONS                 ->  where they live in this file
   5 Historical Intelligence & Prevention Loop -> bottom half of this file (offline, outside the real-time graph)
 Deterministic blocks: policy_gate, build_features, evidence_match, interpret_claim, the formulas, abuse rules, cost model, guardrails.
 AI agents (exactly 3): Evidence & Claim Agent, Behaviour & Abuse Agent, Resolution Reasoning Agent.
-With no ANTHROPIC_API_KEY the agents add nothing and every number is exactly the documented formula.
+With no LLM configured (LLM_API_KEY) the agents add nothing and every number is exactly the documented formula.
 
 ------------------------------------------------------------------------------------------------------------------------------
 SCORES ARE 0-100 EVERYWHERE (backend, API, Streamlit, report).  Components are normalised to 0-100 by the transparent rules below.
@@ -36,6 +36,7 @@ EXPECTED COST      ExpectedCost(a) = RiskExposure(a) + CustomerFrictionCost(a) +
 """
 import os
 import io
+import re
 import json
 import base64
 import hashlib
@@ -44,7 +45,7 @@ from datetime import datetime, timedelta
 from PIL import Image, ImageStat, ImageFilter
 import db
 
-MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
+MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")   # any model name your OpenAI-compatible provider serves
 PHYSICAL_REASONS = {"damaged", "defective", "wrong_item", "not_as_described"}
 ABUSE_PATTERNS = ["serial_refunder", "return_abuse", "fake_defect_pattern", "refund_farming", "policy_exploitation"]
 
@@ -93,24 +94,42 @@ def ref_time(claim):
 
 
 # =========================================================================== LLM helper
+_LLM = {"fn": None}
+
+
+def set_llm(fn):
+    """Plug in any language-model provider: fn(system: str, payload: dict, image_bytes: bytes | None) -> dict | None. None resets."""
+    _LLM["fn"] = fn
+
+
 def llm_json(system, payload, image_bytes=None):
-    """Ask Claude for a JSON answer. Returns None (-> deterministic result only) if no key / any error."""
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    """Ask an LLM for a JSON answer. Provider-neutral: an injected function (set_llm) or any OpenAI-compatible chat-completions endpoint
+    configured with LLM_API_KEY / LLM_BASE_URL / LLM_MODEL. Returns None (-> deterministic result only) if not configured or on any error."""
+    if _LLM["fn"]:
+        try:
+            return _LLM["fn"](system, payload, image_bytes)
+        except Exception as e:
+            print(f"[llm fallback] {e}")
+            return None
+    key = os.getenv("LLM_API_KEY")
+    if not key:
         return None
     try:
-        import anthropic
-        content = []
+        import requests
+        content = [{"type": "text", "text": json.dumps(payload, default=str)}]
         if image_bytes:
             img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
             img.thumbnail((1024, 1024))
             buf = io.BytesIO()
             img.save(buf, "JPEG")
-            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
-                                                         "data": base64.b64encode(buf.getvalue()).decode()}})
-        content.append({"type": "text", "text": json.dumps(payload, default=str)})
-        r = anthropic.Anthropic().messages.create(model=MODEL, max_tokens=700, system=system + "\nReply with ONLY a JSON object.",
-                                                  messages=[{"role": "user", "content": content}])
-        t = r.content[0].text
+            content.append({"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()}})
+        r = requests.post(os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/") + "/chat/completions",
+                          headers={"Authorization": f"Bearer {key}"}, timeout=60,
+                          json={"model": MODEL, "max_tokens": 700, "response_format": {"type": "json_object"},
+                                "messages": [{"role": "system", "content": system + "\nReply with ONLY a JSON object."},
+                                             {"role": "user", "content": content}]})
+        r.raise_for_status()
+        t = r.json()["choices"][0]["message"]["content"]
         return json.loads(t[t.index("{"): t.rindex("}") + 1])
     except Exception as e:  # never let the AI layer break the refund flow
         print(f"[llm fallback] {e}")
@@ -217,11 +236,69 @@ def _hamming(a, b):
     return bin(int(a, 16) ^ int(b, 16)).count("1")
 
 
-SIMILAR_MAX_HAMMING = 5  # 64-bit average-hash distance at or below which two photos count as the same picture
+# Reuse detection = three signals; ANY of them marks two photos as the same picture:
+#   aHash (cheap, brittle) | pHash (DCT, survives resize / recompression / blur) | ORB local features + RANSAC (survives crops and shifts)
+# Thresholds are prototype settings; they are NOT calibrated on real product photos (see docs/spec_alignment.md).
+SIMILAR_MAX_HAMMING = 5       # aHash: 64-bit distance
+PHASH_MAX_HAMMING = 8         # pHash: 64-bit distance
+ORB_MIN_INLIERS = 40          # geometrically verified ORB matches (synthetic calibration: ~0.3% false matches, 100% of 76% crops)
+try:
+    import numpy as np
+    import cv2
+except ImportError:           # OpenCV/numpy are optional: without them only the hash signals run
+    np = cv2 = None
+_DCT = None
+
+
+def _dct_matrix(n=32):
+    k, i = np.arange(n)[:, None], np.arange(n)[None, :]
+    m = np.sqrt(2.0 / n) * np.cos(np.pi * (2 * i + 1) * k / (2 * n))
+    m[0] /= np.sqrt(2)
+    return m
+
+
+def _phash(gray):
+    """64-bit DCT perceptual hash (low-frequency 8x8 block of a 32x32 DCT, thresholded at its median)."""
+    global _DCT
+    if np is None:
+        return None
+    _DCT = _dct_matrix() if _DCT is None else _DCT
+    a = np.asarray(gray.resize((32, 32), Image.LANCZOS), dtype=np.float64)
+    low = (_DCT @ a @ _DCT.T)[:8, :8].flatten()
+    bits = low > np.median(low[1:])
+    return f"{int(''.join('1' if b else '0' for b in bits), 2):016x}"
+
+
+def _orb_signature(gray):
+    """ORB keypoints + descriptors of a downscaled grayscale image (stored as JSON text); None if OpenCV is unavailable."""
+    if cv2 is None:
+        return None
+    g = gray.copy()
+    g.thumbnail((480, 480))
+    kps, desc = cv2.ORB_create(nfeatures=400).detectAndCompute(np.asarray(g), None)
+    if desc is None or len(kps) < 8:
+        return None
+    return {"d": base64.b64encode(desc.tobytes()).decode(), "k": [[int(k.pt[0]), int(k.pt[1])] for k in kps]}
+
+
+def orb_inliers(a, b):
+    """Number of RANSAC-verified ORB matches between two stored signatures (0 when none/unavailable)."""
+    if cv2 is None or not a or not b:
+        return 0
+    da = np.frombuffer(base64.b64decode(a["d"]), dtype=np.uint8).reshape(-1, 32)
+    db_ = np.frombuffer(base64.b64decode(b["d"]), dtype=np.uint8).reshape(-1, 32)
+    pairs = cv2.BFMatcher(cv2.NORM_HAMMING).knnMatch(da, db_, k=2)
+    good = [m[0] for m in pairs if len(m) == 2 and m[0].distance < 0.75 * m[1].distance]
+    if len(good) < 10:
+        return 0
+    pa = np.float32([a["k"][m.queryIdx] for m in good])
+    pb = np.float32([b["k"][m.trainIdx] for m in good])
+    _, mask = cv2.estimateAffinePartial2D(pa, pb, method=cv2.RANSAC, ransacReprojThreshold=5.0)
+    return int(mask.sum()) if mask is not None else 0
 
 
 def image_signature(image_bytes):
-    """Hash / metadata / quality of one image (no database access) - also used by the dataset evaluation."""
+    """Hashes / local features / metadata / quality of one image (no database access) - also used by the dataset evaluation."""
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     w, h = img.size
     gray = img.convert("L")
@@ -231,50 +308,235 @@ def image_signature(image_bytes):
     sharp = ImageStat.Stat(gray.filter(ImageFilter.FIND_EDGES)).var[0]
     brightness = ImageStat.Stat(gray).mean[0]
     quality = clip(0.4 * min(w * h / (640 * 480), 1) + 0.4 * min(sharp / 400, 1) + 0.2 * (1 if 35 < brightness < 220 else 0))
-    return {"sha256": hashlib.sha256(image_bytes).hexdigest(), "ahash": ahash, "width": w, "height": h,
-            "sharpness": round(sharp, 1), "brightness": round(brightness, 1), "quality": round(quality, 3)}
+    return {"sha256": hashlib.sha256(image_bytes).hexdigest(), "ahash": ahash, "phash": _phash(gray), "orb": _orb_signature(gray),
+            "width": w, "height": h, "sharpness": round(sharp, 1), "brightness": round(brightness, 1), "quality": round(quality, 3)}
+
+
+def similarity_methods(sig, other):
+    """Which signals say these two photos are the same picture? `other` holds ahash / phash / orb (JSON text or dict) of a stored photo."""
+    methods = []
+    if other.get("ahash") and _hamming(sig["ahash"], other["ahash"]) <= SIMILAR_MAX_HAMMING:
+        methods.append("ahash")
+    if sig.get("phash") and other.get("phash") and _hamming(sig["phash"], other["phash"]) <= PHASH_MAX_HAMMING:
+        methods.append("phash")
+    if sig.get("orb") and other.get("orb"):
+        o = other["orb"] if isinstance(other["orb"], dict) else json.loads(other["orb"])
+        if orb_inliers(sig["orb"], o) >= ORB_MIN_INLIERS:
+            methods.append("orb")
+    return methods
+
+
+# ---- optional text-image consistency (CLIP-style): does the photo look like what the customer claims? ------------------------------
+_IMG_TEXT = {"fn": None, "tried": False}
+CLIP_PROMPTS = {"damaged": "a photo of a damaged, broken product", "defective": "a photo of a broken, faulty product",
+                "wrong_item": "a photo of a product that is different from what was ordered",
+                "not_as_described": "a photo of a counterfeit or misleading product"}
+CLIP_BASELINE = "a photo of an intact, new, undamaged product"
+
+
+def set_image_text_scorer(fn):
+    """Inject fn(image_bytes, category) -> consistency in [0, 1]. None resets to the configured backend."""
+    _IMG_TEXT.update(fn=fn, tried=fn is not None)
+
+
+def _image_text_fn():
+    if _IMG_TEXT["fn"] or _IMG_TEXT["tried"] or os.getenv("IMAGE_TEXT", "off") != "clip":
+        return _IMG_TEXT["fn"]
+    _IMG_TEXT["tried"] = True
+    try:
+        import torch
+        from transformers import CLIPModel, CLIPProcessor
+        name = os.getenv("CLIP_MODEL", "openai/clip-vit-base-patch32")
+        model, proc = CLIPModel.from_pretrained(name), CLIPProcessor.from_pretrained(name)
+
+        def fn(image_bytes, category):
+            prompt = CLIP_PROMPTS.get(category)
+            if not prompt:
+                return None
+            inputs = proc(text=[prompt, CLIP_BASELINE], images=Image.open(io.BytesIO(image_bytes)).convert("RGB"), return_tensors="pt", padding=True)
+            with torch.no_grad():
+                probs = model(**inputs).logits_per_image.softmax(dim=1)[0]
+            return float(probs[0])                     # P(claimed condition) vs P(intact product)
+        _IMG_TEXT["fn"] = fn
+    except Exception as e:  # CLIP not installed / no network -> the check is simply not available
+        print(f"[text-image consistency unavailable] {e}")
+    return _IMG_TEXT["fn"]
 
 
 def evidence_match(image_bytes, claim):
-    """Hash / similarity / metadata. Quality score in 0..1 plus reuse detection against stored evidence."""
+    """Hash / local-feature similarity / metadata. Quality in 0..1, reuse detection against stored evidence, optional text-image consistency."""
     if not image_bytes:
         return {"present": False}
     try:
         sig = image_signature(image_bytes)
     except Exception:  # corrupt / unsupported file
         return {"present": False, "invalid_file": True}
-    sha, ahash = sig["sha256"], sig["ahash"]
-    exact, similar = [], []
-    for e in db.q("SELECT * FROM evidence WHERE claim_id<>:c", c=claim["id"]):
-        if e["sha256"] == sha:
+    exact, similar, methods = [], [], {}
+    for e in db.q("SELECT * FROM evidence WHERE claim_id<>:c ORDER BY created_at DESC LIMIT 3000", c=claim["id"]):
+        if e["sha256"] == sig["sha256"]:
             exact.append(e)
-        elif _hamming(e["ahash"], ahash) <= SIMILAR_MAX_HAMMING:
+            continue
+        m = similarity_methods(sig, e)
+        if m:
             similar.append(e)
+            methods[e["claim_id"]] = m
     other = lambda rows: [e for e in rows if e["customer_id"] != claim["customer_id"]]
-    return {"present": True, **sig,
-            "exact_reuse_other_customer": bool(other(exact)), "similar_reuse_other_customer": bool(other(similar)),
-            "reuse_same_customer": any(e["customer_id"] == claim["customer_id"] for e in exact + similar),
-            "matched_claims": [e["claim_id"] for e in exact + similar]}
+    out = {"present": True, **sig, "orb": sig["orb"],
+           "exact_reuse_other_customer": bool(other(exact)), "similar_reuse_other_customer": bool(other(similar)),
+           "reuse_same_customer": any(e["customer_id"] == claim["customer_id"] for e in exact + similar),
+           "matched_claims": [e["claim_id"] for e in exact + similar],
+           "match_methods": sorted({m for v in methods.values() for m in v}), "text_image_consistency": None}
+    fn = _image_text_fn()
+    if fn and claim["reason"] in PHYSICAL_REASONS:
+        try:
+            out["text_image_consistency"] = fn(image_bytes, interpret_claim(claim)["reason_category"])
+        except Exception as e:
+            print(f"[text-image consistency failed] {e}")
+    return out
 
 
-# =========================================================================== CLAIM INTERPRETATION (deterministic part of the Evidence & Claim agent)
-DESC_KEYWORDS = {
-    "damaged": ["damaged", "broken", "cracked", "torn", "dent", "shattered", "scratch"],
-    "defective": ["defective", "not working", "doesn't work", "does not work", "stopped working", "faulty", "malfunction"],
-    "wrong_item": ["wrong item", "different item", "not what i ordered", "incorrect item"],
-    "not_as_described": ["not as described", "not as shown", "looks different", "counterfeit", "fake"],
-    "size_issue": ["too small", "too big", "doesn't fit", "does not fit"],
-    "changed_mind": ["changed my mind", "don't like", "do not like", "no longer need", "don't want"],
-    "not_delivered": ["not delivered", "never arrived", "didn't receive", "did not receive"],
+# =========================================================================== CLAIM INTERPRETATION (NLP) + SENTIMENT
+# Backends for reason classification:  "rules" (default: negation-aware regex phrases, English)  |  "transformer" (zero-shot NLI model,
+# CLAIM_NLP=transformer, model CLAIM_NLP_MODEL; multilingual models work for Olist's Portuguese).  If the model cannot be loaded the rules run
+# and the output says so (`nlp_backend`).  Tests/experiments can inject a classifier with set_text_classifier().
+CATEGORY_LABELS = {
+    "damaged": "the item arrived physically damaged or broken", "defective": "the item does not work or is faulty",
+    "wrong_item": "the wrong item was delivered", "not_as_described": "the item is not as described or is counterfeit",
+    "size_issue": "the size or fit is wrong", "changed_mind": "the customer changed their mind or no longer wants it",
+    "not_delivered": "the order was never delivered"}
+DESC_PATTERNS = {   # phrases already containing a negation ("doesn't work", "never arrived") are NOT negation-checked
+    "damaged": r"\b(damag\w*|broke\w*|broken|crack\w*|shatter\w*|torn|tore|ripped|dent\w*|scratch\w*|smash\w*|crush\w*|bent|leak\w*|chipped|snapped)\b",
+    "defective": r"\b(defect\w*|faulty|malfunction\w*|dead on arrival|doa|(?:does|did|do|is|was|has|have)(?:n't| not) (?:work|turn on|power|charge|start|function)\w*"
+                 r"|stopped working|not working|won't (?:turn|work|charge|start)|no power|burn\w*)",
+    "wrong_item": r"\b(wrong (?:item|product|size|colou?r|model)|different (?:item|product)|not what i ordered|incorrect (?:item|product)|instead of what i)\b",
+    "not_as_described": r"\b(not as (?:described|shown|advertised|pictured)|looks? different|nothing like|counterfeit|fake|knock-?off|misleading|false advertis\w*"
+                        r"|different from (?:the )?(?:photo|picture|listing|description))\b",
+    "size_issue": r"\b(too (?:small|big|large|tight|loose|short|long)|(?:doesn't|does not|didn't|did not) fit|size (?:is|was) off)\b",
+    "changed_mind": r"\b(changed my mind|(?:don't|do not) (?:like|want)|no longer (?:need|want)|decided not to|bought (?:it )?by mistake|ordered (?:it )?by mistake)\b",
+    "not_delivered": r"\b(not delivered|never (?:arrived|came|received|showed)|(?:didn't|did not) (?:receive|arrive)|(?:hasn't|has not) (?:arrived|come)|never got|missing package|lost in transit)\b",
 }
+NEGATORS = {"not", "no", "never", "without", "nothing", "hardly", "neither", "nor", "cannot", "zero"}
 VAGUE_WORDS = ["issue", "problem", "bad", "not good", "poor", "unsatisfied"]
+_NLP = {"fn": None, "tried": False, "backend": "rules"}
+
+
+def set_text_classifier(fn):
+    """Inject a text classifier fn(text) -> {category: probability}. None resets to the configured backend."""
+    _NLP.update(fn=fn, tried=fn is not None, backend="injected" if fn else "rules")
+
+
+def _text_classifier():
+    if _NLP["fn"] or _NLP["tried"] or os.getenv("CLAIM_NLP", "rules") != "transformer":
+        return _NLP["fn"]
+    _NLP["tried"] = True
+    try:
+        from transformers import pipeline
+        pipe = pipeline("zero-shot-classification", model=os.getenv("CLAIM_NLP_MODEL", "MoritzLaurer/deberta-v3-base-zeroshot-v2.0"))
+        names, labels = list(CATEGORY_LABELS), list(CATEGORY_LABELS.values())
+
+        def fn(text):
+            r = pipe(text, candidate_labels=labels, hypothesis_template="This customer message says that {}.", multi_label=True)
+            return {names[labels.index(l)]: float(p) for l, p in zip(r["labels"], r["scores"])}
+        _NLP.update(fn=fn, backend="transformer")
+    except Exception as e:  # model not installed / no network -> fall back to the rules
+        print(f"[claim NLP fallback to rules] {e}")
+    return _NLP["fn"]
+
+
+def _tokens(text):
+    return re.findall(r"[a-z']+", text.lower())
+
+
+def rule_categories(text):
+    """Negation-aware phrase matching -> (affirmed categories, negated categories). 'It is not damaged' does NOT affirm 'damaged'."""
+    text = text.lower()
+    affirmed, negated = [], []
+    for cat, pat in DESC_PATTERNS.items():
+        hit_aff = hit_neg = False
+        for m in re.finditer(pat, text):
+            phrase = m.group(0)
+            embeds_negation = bool(re.search(r"n't|\b(?:not|no|never)\b", phrase))
+            before = _tokens(text[:m.start()])[-3:]
+            neg = (not embeds_negation) and any(t in NEGATORS or t.endswith("n't") for t in before)
+            hit_neg, hit_aff = hit_neg or neg, hit_aff or not neg
+        if hit_aff:
+            affirmed.append(cat)
+        elif hit_neg:
+            negated.append(cat)
+    return affirmed, negated
+
+
+def classify_text_category(text):
+    """Best single reason category for free text (or None when unclear). Returns (category, backend)."""
+    text = (text or "").strip()
+    fn = _text_classifier()
+    if fn and text:
+        scores = fn(text)
+        best = max(scores, key=scores.get)
+        return (best if scores[best] >= 0.5 else None), _NLP["backend"]
+    aff, _ = rule_categories(text)
+    return (aff[0] if len(aff) == 1 else None), "rules"
+
+
+# ---- sentiment: customer-experience routing + product insights ONLY. It is never an input to any risk score, cost or fraud rule. -------
+_SENT = {"fn": None, "tried": False, "backend": "vader"}
+_FALLBACK_LEXICON = {"angry": -.7, "furious": -.8, "terrible": -.7, "awful": -.7, "useless": -.6, "horrible": -.7, "worst": -.8, "disappointed": -.5,
+                     "bad": -.4, "broken": -.3, "great": .6, "good": .5, "love": .7, "perfect": .7, "happy": .6, "thanks": .4}
+
+
+def set_sentiment_scorer(fn):
+    """Inject fn(text) -> score in [-1, 1]. None resets to the configured backend."""
+    _SENT.update(fn=fn, tried=fn is not None, backend="injected" if fn else "vader")
+
+
+def _sentiment_fn():
+    if _SENT["fn"] or _SENT["tried"]:
+        return _SENT["fn"]
+    _SENT["tried"] = True
+    model = os.getenv("SENTIMENT_MODEL")           # e.g. a multilingual transformer for Olist's Portuguese reviews
+    try:
+        if model:
+            from transformers import pipeline
+            pipe = pipeline("text-classification", model=model, top_k=None)
+
+            def fn(text):
+                out = {d["label"].lower(): d["score"] for d in pipe(text[:512])[0]}
+                return out.get("positive", 0.0) - out.get("negative", 0.0)
+            _SENT.update(fn=fn, backend=model)
+        else:
+            from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+            an = SentimentIntensityAnalyzer()
+            _SENT.update(fn=lambda t: an.polarity_scores(t)["compound"], backend="vader (English only)")
+    except Exception:
+        _SENT.update(fn=lambda t: max(-1.0, min(1.0, sum(_FALLBACK_LEXICON.get(w, 0) for w in _tokens(t)))), backend="mini-lexicon")
+    return _SENT["fn"]
+
+
+def sentiment(text):
+    text = (text or "").strip()
+    if not text:
+        return {"score": 0.0, "label": "neutral", "backend": "none"}
+    score = round(max(-1.0, min(1.0, float(_sentiment_fn()(text)))), 3)
+    return {"score": score, "label": "negative" if score <= -0.35 else "positive" if score >= 0.35 else "neutral", "backend": _SENT["backend"]}
+
+
+def cx_priority(sent, trust, action):
+    """Customer-experience routing: an upset customer with a trustworthy history gets priority care whenever we add friction or decline.
+    Changes who contacts the customer, never the risk score, the cost or the decision."""
+    return bool(sent["score"] <= -0.5 and trust >= 60 and action != "auto_approve")
 
 
 def interpret_claim(claim):
-    """Reason category, ambiguity flags and a 0-100 ClaimAmbiguity score (rules; the agent may add interpretation on top)."""
-    text = (claim.get("description") or "").strip().lower()
+    """Reason category, ambiguity flags and a 0-100 ClaimAmbiguity score (+ sentiment for CX routing, which does not affect the score)."""
+    text = (claim.get("description") or "").strip()
     physical = claim["reason"] in PHYSICAL_REASONS
-    matched = [c for c, words in DESC_KEYWORDS.items() if any(w in text for w in words)]
+    fn = _text_classifier()
+    scores = fn(text) if (fn and text) else None
+    if scores is not None:
+        matched, negated, backend = [c for c, p in scores.items() if p >= 0.5], [], _NLP["backend"]
+    else:
+        matched, negated = rule_categories(text)
+        backend = "rules"
     flags, score = [], 0
     if len(text) < 5:
         score += 50
@@ -285,22 +547,30 @@ def interpret_claim(claim):
     if physical and "changed_mind" in matched:
         score += 50
         flags.append("reason_description_mismatch")
+    elif claim["reason"] in negated and claim["reason"] not in matched:
+        score += 50
+        flags.append("claim_negated_by_text")          # e.g. claims 'damaged' but writes "it is not damaged"
     elif matched and claim["reason"] not in matched:
         score += 30
         flags.append("reason_category_conflict")
-    if physical and not matched and any(w in text for w in VAGUE_WORDS):
+    if physical and not matched and not negated and any(w in text.lower() for w in VAGUE_WORDS):
         score += 25
         flags.append("vague_description")
     category = claim["reason"] if (not matched or claim["reason"] in matched) else matched[0]
-    return {"reason_category": category, "text_categories": matched, "ambiguity_flags": flags, "ambiguity": clip100(score)}
+    return {"reason_category": category, "text_categories": matched, "negated_categories": negated, "ambiguity_flags": flags,
+            "ambiguity": clip100(score), "nlp_backend": backend, "sentiment": sentiment(text)}
 
 
 def evidence_inconsistency(claim, ev):
-    """0-100: how little the evidence supports the claim (image quality is the deterministic proxy; the agent may add vision findings)."""
+    """0-100: how little the evidence supports the claim. Image quality is the deterministic proxy; when a text-image consistency scorer
+    (CLIP) is enabled the photo must also look like the claimed condition:  max(100*(1-quality), 100*(1-consistency))."""
     physical = claim["reason"] in PHYSICAL_REASONS
     if not ev.get("present"):
         return 65.0 if physical else 0.0
-    return clip100(100 * (1 - ev["quality"]))
+    score = 100 * (1 - ev["quality"])
+    if ev.get("text_image_consistency") is not None:
+        score = max(score, 100 * (1 - ev["text_image_consistency"]))
+    return clip100(score)
 
 
 def evidence_reuse_score(ev):
@@ -373,7 +643,7 @@ def abuse_strength(patterns):
 
 # =========================================================================== AI AGENT 4: Evidence & Claim agent
 def evidence_claim_agent(claim, gate, ev, image_bytes=None):
-    """Claim interpretation + evidence intelligence: deterministic components, then (optional) Claude interpretation of text/image."""
+    """Claim interpretation + evidence intelligence: deterministic components, then (optional) LLM interpretation of text/image."""
     interp = interpret_claim(claim)
     physical = claim["reason"] in PHYSICAL_REASONS
     flags = list(gate["violations"]) + interp["ambiguity_flags"]
@@ -391,16 +661,19 @@ def evidence_claim_agent(claim, gate, ev, image_bytes=None):
             flags.append("evidence_similar_to_other_customer")
         if ev["reuse_same_customer"]:
             flags.append("evidence_reused_across_own_claims")
+        if ev.get("text_image_consistency") is not None and ev["text_image_consistency"] < 0.4:
+            flags.append("image_text_mismatch")
     if claim["amount"] >= 10000:
         flags.append("high_value_claim")
     comps = {"ambiguity": interp["ambiguity"], "inconsistency": evidence_inconsistency(claim, ev), "evidence_reuse": evidence_reuse_score(ev)}
     hard = bool(ev.get("exact_reuse_other_customer") or ev.get("similar_reuse_other_customer"))
     rule = {"components": comps, "evidence_confidence": evidence_confidence(claim, ev), "reason_category": interp["reason_category"],
             "flags": sorted(set(flags)), "hard": hard,
+            "nlp_backend": interp["nlp_backend"], "sentiment": interp["sentiment"],
             "summary": "claim/evidence assessment: " + (", ".join(sorted(set(flags))) or "no suspicious signals")}
     system = ("You are the Evidence & Claim agent of a refund-fraud system. The deterministic claim interpretation, evidence stats and "
               "component scores are given. Look at the image (if attached) and text: does the image support the stated reason, is quality "
-              "adequate, anything suspicious or ambiguous? Return JSON {risk_adjustment: number between -10 and 10, flags:[str], summary:str}.")
+              "adequate, anything suspicious or ambiguous? The customer's sentiment is for customer-experience routing ONLY: never treat anger or politeness as evidence of fraud or legitimacy. Return JSON {risk_adjustment: number between -10 and 10, flags:[str], summary:str}.")
     llm = llm_json(system, {"claim": claim, "gate": {k: gate[k] for k in ("eligible", "violations")}, "deterministic": rule,
                             "evidence": {k: v for k, v in ev.items() if k != "sha256"}}, image_bytes)
     out = dict(rule, llm_adjustment=llm_adjustment(llm, hard))
@@ -412,7 +685,7 @@ def evidence_claim_agent(claim, gate, ev, image_bytes=None):
 
 # =========================================================================== AI AGENT 5: Behaviour & Abuse agent
 def behaviour_abuse_agent(claim, f, ev=None):
-    """Behavioural risk, trust index and abuse patterns: rules/formula first, then (optional) Claude interpretation of the history."""
+    """Behavioural risk, trust index and abuse patterns: rules/formula first, then (optional) LLM interpretation of the history."""
     ev = ev or {"present": False}
     patterns = detect_abuse_patterns(f, claim, ev)
     other = []
@@ -575,22 +848,38 @@ INTERVENTIONS = {
 LATE_MIN_REFUNDS, LATE_SHARE_FLAG = 5, 0.25
 
 
+NEG_REVIEW_MIN = 10   # reviews needed before an entity can be a negative-review outlier
+
+
 def _rates(group_col, name_col):
     orders = db.q(f"SELECT {group_col} AS k, MAX({name_col}) AS name, COUNT(*) AS n FROM orders GROUP BY {group_col}")
     refunds = {r["k"]: r["n"] for r in db.q(f"SELECT {group_col} AS k, COUNT(*) AS n FROM refund_history GROUP BY {group_col}")}
     avoidable = {r["k"]: r for r in db.q(
         f"SELECT o.{group_col} AS k, COUNT(*) AS claims, SUM(r.amount * r.exposure_risk) AS exp_loss FROM refund_requests r "
         f"JOIN orders o ON o.id=r.order_id GROUP BY o.{group_col}")}
+    # real customer-experience signals: Olist reviews linked to real orders, and the sentiment of refund-claim text (product insights only)
+    reviews = {r["k"]: r for r in db.q(
+        f"SELECT o.{group_col} AS k, COUNT(*) AS n, AVG(rv.rating) AS avg_rating, AVG(CASE WHEN rv.rating<=2 THEN 1.0 ELSE 0.0 END) AS neg "
+        f"FROM source_reviews rv JOIN orders o ON o.id=rv.product_ref WHERE rv.source='olist' AND rv.rating IS NOT NULL GROUP BY o.{group_col}")}
+    sent = {r["k"]: r["s"] for r in db.q(
+        f"SELECT o.{group_col} AS k, AVG(r.sentiment) AS s FROM refund_requests r JOIN orders o ON o.id=r.order_id "
+        f"WHERE r.sentiment IS NOT NULL GROUP BY o.{group_col}")}
     rows = []
     for o in orders:
         rate = refunds.get(o["k"], 0) / max(o["n"], 1)
-        a = avoidable.get(o["k"], {})
+        a, rv = avoidable.get(o["k"], {}), reviews.get(o["k"])
         rows.append({"id": o["k"], "name": o["name"], "orders": o["n"], "refunds": refunds.get(o["k"], 0),
                      "refund_rate": round(rate, 3), "new_claims": a.get("claims", 0),
-                     "expected_avoidable_loss": round(a.get("exp_loss") or 0, 1)})
+                     "expected_avoidable_loss": round(a.get("exp_loss") or 0, 1),
+                     "review_count": rv["n"] if rv else 0, "avg_review_score": round(rv["avg_rating"], 2) if rv else None,
+                     "negative_review_rate": round(rv["neg"], 3) if rv else None,
+                     "avg_sentiment": round(sent[o["k"]], 3) if sent.get(o["k"]) is not None else None})
     avg = sum(r["refund_rate"] for r in rows) / max(len(rows), 1)
+    negs = [r["negative_review_rate"] for r in rows if r["review_count"] >= NEG_REVIEW_MIN]
+    neg_avg = sum(negs) / len(negs) if negs else 0
     for r in rows:
         r["outlier"] = r["refund_rate"] >= 1.5 * avg and r["refunds"] >= 3
+        r["review_outlier"] = bool(r["review_count"] >= NEG_REVIEW_MIN and r["negative_review_rate"] >= max(0.25, 1.5 * neg_avg))
     return sorted(rows, key=lambda r: -r["refund_rate"])
 
 
@@ -643,7 +932,7 @@ def policy_insights():
 
 def operations_view():
     """Which claims need intervention now?"""
-    return db.q("SELECT r.id AS claim_id, r.customer_id, r.amount, r.exposure_risk, r.decision, r.status, r.rationale, "
+    return db.q("SELECT r.id AS claim_id, r.customer_id, r.amount, r.exposure_risk, r.decision, r.status, r.rationale, r.sentiment, r.cx_priority, "
                 "c.id AS case_id FROM refund_requests r LEFT JOIN review_cases c ON c.claim_id=r.id "
                 "WHERE r.status IN ('under_review','awaiting_evidence','awaiting_return') ORDER BY r.exposure_risk * r.amount DESC")
 
@@ -661,7 +950,9 @@ def management_view():
     high = [p for p in prof if p["behavior_risk"] >= 60]
     customer_risk = {"profiled_customers": len(prof), "high_behavioural_risk_customers(>=60)": len(high),
                      "avg_trust_index": round(sum(p["trust_index"] for p in prof) / len(prof), 1) if prof else None}
-    return {"customer_risk": customer_risk, "claims": total, "auto_resolution_rate": round(pick("auto_approve")["claims"] / total, 2),
+    cx = db.q1("SELECT SUM(cx_priority) AS n, AVG(sentiment) AS s FROM refund_requests")
+    customer_experience = {"cx_priority_claims": int(cx["n"] or 0), "avg_claim_sentiment": round(cx["s"], 3) if cx["s"] is not None else None}
+    return {"customer_risk": customer_risk, "customer_experience": customer_experience, "claims": total, "auto_resolution_rate": round(pick("auto_approve")["claims"] / total, 2),
             "manual_review_rate": round(pick("manual_review")["claims"] / total, 2),
             "expected_loss_avoided": round(avoided, 1), "expected_leakage_auto_approved": round(leakage, 1),
             "by_decision": by_decision, "by_category": by_cat, "abuse_patterns": abuse_pattern_counts()}
@@ -687,20 +978,35 @@ def run_historical_loop():
         db.insert("product_risk_snapshot", id=db.uid("PS"), snapshot_at=ts, product_id=p["id"], product_name=p["name"],
                   vendor_id=(db.q1("SELECT vendor_id FROM orders WHERE product_id=:p LIMIT 1", p=p["id"]) or {}).get("vendor_id"),
                   orders=p["orders"], refunds=p["refunds"], refund_rate=p["refund_rate"], top_reasons=json.dumps(p["top_reasons"]),
-                  risk_score=clip(p["refund_rate"] / 0.5), outlier=int(p["outlier"]))
+                  risk_score=clip(p["refund_rate"] / 0.5), outlier=int(p["outlier"]), avg_sentiment=p["avg_sentiment"],
+                  avg_review_score=p["avg_review_score"], negative_review_rate=p["negative_review_rate"], review_count=p["review_count"])
     for v in vends:
         db.insert("vendor_risk_snapshot", id=db.uid("VS"), snapshot_at=ts, vendor_id=v["id"], orders=v["orders"], refunds=v["refunds"],
                   refund_rate=v["refund_rate"], expected_avoidable_loss=v["expected_avoidable_loss"],
-                  risk_score=clip(v["refund_rate"] / 0.5), outlier=int(v["outlier"]))
+                  risk_score=clip(v["refund_rate"] / 0.5), outlier=int(v["outlier"]), avg_review_score=v["avg_review_score"],
+                  negative_review_rate=v["negative_review_rate"], review_count=v["review_count"])
     for p in prods:
         if p["outlier"]:
             reasons = p["top_reasons"]
             fix = ("Quality inspection + packaging review; request vendor corrective action." if set(reasons) & {"defective", "damaged"}
                    else "Fix product listing / description accuracy." if "not_as_described" in reasons
                    else "Review product page and return reasons.")
+            tone = f" Claim text is on average {'very negative' if p['avg_sentiment'] <= -0.5 else 'negative' if p['avg_sentiment'] <= -0.2 else 'neutral'} " \
+                   f"(sentiment {p['avg_sentiment']})." if p["avg_sentiment"] is not None else ""
             new.append(_add_insight("product", p["id"], p["name"], "refund_rate_outlier",
-                                    f"{p['name']} refund rate {p['refund_rate']:.0%} is an outlier (top reasons: {', '.join(reasons)}).",
+                                    f"{p['name']} refund rate {p['refund_rate']:.0%} is an outlier (top reasons: {', '.join(reasons)}).{tone}",
                                     fix, "refund_rate", p["refund_rate"]))
+    for p in prods:
+        if p["review_outlier"]:
+            new.append(_add_insight("product", p["id"], p["name"], "negative_review_outlier",
+                                    f"{p['negative_review_rate']:.0%} of {p['review_count']} linked reviews for {p['name']} are 1-2 stars (average {p['avg_review_score']}).",
+                                    "Read the complaint texts; check listing accuracy, delivery and quality for this product.", "negative_review_rate",
+                                    p["negative_review_rate"]))
+    for v in vends:
+        if v["review_outlier"]:
+            new.append(_add_insight("vendor", v["id"], v["id"], "negative_review_outlier",
+                                    f"{v['negative_review_rate']:.0%} of {v['review_count']} linked reviews for vendor {v['id']} are 1-2 stars (average {v['avg_review_score']}).",
+                                    "Vendor service/quality review; compare with category baseline.", "negative_review_rate", v["negative_review_rate"]))
     for v in vends:
         if v["outlier"]:
             new.append(_add_insight("vendor", v["id"], v["id"], "refund_rate_outlier",
@@ -742,6 +1048,11 @@ def apply_intervention(insight_id, note=""):
 
 def _current_metric(row):
     kind, ent = row["kind"], row["entity_id"]
+    if row["metric_name"] == "negative_review_rate":
+        col = "product_id" if kind == "product" else "vendor_id"
+        r = db.q1(f"SELECT AVG(CASE WHEN rv.rating<=2 THEN 1.0 ELSE 0.0 END) AS neg FROM source_reviews rv JOIN orders o ON o.id=rv.product_ref "
+                  f"WHERE rv.source='olist' AND rv.rating IS NOT NULL AND o.{col}=:v", v=ent)
+        return r["neg"] or 0.0
     if kind in ("product", "vendor"):
         col = "product_id" if kind == "product" else "vendor_id"
         o = db.q1(f"SELECT COUNT(*) AS n FROM orders WHERE {col}=:v", v=ent)["n"]

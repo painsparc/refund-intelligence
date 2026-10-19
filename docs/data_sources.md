@@ -13,12 +13,12 @@ and must be checked on the official page before the final report cites it.
 | What it is | ~100k anonymised orders from a Brazilian marketplace, 2016-2018 (**verified**) |
 | Licence / access | **to verify** on the Kaggle page (not stated in the pages I could read). Check commercial/derivative terms before redistributing any data - this repo does not redistribute it |
 | Citation | Olist; dataset as published on Kaggle (cite the Kaggle URL and the version/date you downloaded) |
-| Files used | `olist_orders_dataset.csv`, `olist_order_items_dataset.csv`, `olist_customers_dataset.csv`, `olist_products_dataset.csv`, `product_category_name_translation.csv` (nine CSVs exist; the file names are **verified**, the column layout is as documented on Kaggle - **to verify** against your copy) |
-| Fields extracted | orders: `order_id, customer_id, order_status, order_purchase_timestamp, order_delivered_customer_date`; items: `order_id, order_item_id, product_id, seller_id, price`; customers: `customer_id, customer_unique_id`; products: `product_id, product_category_name` |
-| Mapping | `customer_unique_id`→`customers.id`; `order_id`→`orders.id`; `seller_id`→`vendor_id`; category (English via translation file) →`category`; sum of item `price` (freight excluded)→`amount`; `order_delivered_customer_date`→`delivered_at` |
-| Transformations | drop orders with no purchase timestamp / no customer match / no items; optional random sample (`--olist-limit`, seed 7); `canceled`/`unavailable`→`canceled`, other non-delivered→`in_transit`; missing category→`unknown` |
-| Limitations | **no refunds, no fraud labels**; most customers buy once, so behavioural history is thin; policy window / auto-approve limit are **assumptions** (provenance `assumed`) |
-| Used for | deterministic policy gate on real timestamps; real order attributes cloned into synthetic scenarios; product/vendor intelligence |
+| Files used | `olist_orders_dataset.csv`, `olist_order_items_dataset.csv`, `olist_customers_dataset.csv`, `olist_products_dataset.csv`, `product_category_name_translation.csv`, **`olist_order_reviews_dataset.csv`** (nine CSVs exist; the file names are **verified**, the column layout is as documented on Kaggle - **to verify** against your copy) |
+| Fields extracted | orders: `order_id, customer_id, order_status, order_purchase_timestamp, order_delivered_customer_date`; items: `order_id, order_item_id, product_id, seller_id, price`; customers: `customer_id, customer_unique_id`; products: `product_id, product_category_name`; **reviews: `review_id, order_id, review_score, review_comment_title, review_comment_message, review_creation_date`** |
+| Mapping | `customer_unique_id`→`customers.id`; `order_id`→`orders.id`; `seller_id`→`vendor_id`; category (English via translation file) →`category`; sum of item `price` (freight excluded)→`amount`; `order_delivered_customer_date`→`delivered_at`; **review → `source_reviews` (`product_ref` = the real `order_id`, `rating` = score, text kept as is)** |
+| Transformations | drop orders with no purchase timestamp / no customer match / no items; optional random sample (`--olist-limit`, seed 7); `canceled`/`unavailable`→`canceled`, other non-delivered→`in_transit`; missing category→`unknown`; **only reviews whose order was loaded are kept (the rest are counted); reviews without comment text are kept for their score** |
+| Limitations | **no refunds, no fraud labels**; **review text is Portuguese (the default English NLP/sentiment is not evaluated on it) and a bad review is not a refund claim**; most customers buy once, so behavioural history is thin; policy window / auto-approve limit are **assumptions** (provenance `assumed`) |
+| Used for | deterministic policy gate on real timestamps; real order attributes cloned into synthetic scenarios; product/vendor intelligence **including negative-review outliers from the real reviews** |
 
 ## 2. UCI Online Retail II
 | | |
@@ -59,11 +59,18 @@ and must be checked on the official page before the final report cites it.
 | Used for | evidence-reuse recall / false-match rate of the hash-similarity check |
 *(Alternative if you prefer a larger benchmark: the Image Similarity Challenge dataset, DISC21. Copydays was chosen because it is small enough to run locally.)*
 
-## 5. Synthetic labelled abuse scenarios (generated, not a data source)
-`python eval_data.py scenarios --seed 7 --n 30`: serial refunders, refund farmers, policy exploiters, evidence re-uploads (JPEG / resize /
-crop / blur), legitimate controls and near-threshold controls. Every row is `SYN-*`, provenance `synthetic_generator`, label origin
-`synthetic`; labels live only in `eval_labels`. The generator is aligned with the detection rules by construction, so scenario results verify
-the pipeline end to end - they are **not** an estimate of real-world fraud detection performance.
+## 5. Hand-labelled claim set (`data/manual_claims_labelled.csv`)
+60 claim sentences labelled with reason category, whether the text supports the claimed reason, and sentiment, covering plain, paraphrased, negated, vague and
+deliberately hard cases. **Authored and labelled by the developer who also wrote the rules**: a regression/sanity set, not an independent benchmark. For an
+independent test, two teammates label real reviews from `python eval_data.py labelling-sheet` and save `data/manual_labels_real.csv`; the evaluation reports it separately.
+
+## 6. Synthetic customers (generated, not a data source)
+`python eval_data.py scenarios --seed 7 --n 40`: customers are drawn from **behavioural profiles** (normal, heavy-but-genuine, serial refunder, refund farmer,
+policy exploiter, return abuser) described by refunds per year (Poisson), how late in the return window they file (Beta), how close to the auto-approve limit
+they stay, and how often they skip the return, plus evidence re-uploads with randomly drawn edit strength (JPEG / resize / crop / blur / strong). The generator
+**never references a detection threshold** (a test enforces it), so abusers overlap with genuine heavy users and the system can miss some and flag some: recall
+below 100% and false positives above 0 are expected. Every row is `SYN-*`, provenance `synthetic_generator`, label origin `synthetic`; labels live only in
+`eval_labels`. Still synthetic: it shows how the pipeline separates profiles, not real-world fraud performance.
 
 ## Download record (fill in when you download)
 | Source | Downloaded on | Version / date shown | File | SHA-256 (`sha256sum file`) |

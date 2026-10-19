@@ -1,0 +1,61 @@
+id,text,claimed_reason,label_category,text_supports_claim,label_sentiment,tag
+M001,The jar arrived cracked at the base.,damaged,damaged,1,negative,plain
+M002,Box was crushed and the glass inside shattered.,damaged,damaged,1,negative,plain
+M003,Screen is cracked.,damaged,damaged,1,negative,plain
+M004,The handle snapped off the first time I used it.,damaged,damaged,1,negative,paraphrase
+M005,Package arrived with a big dent and the corner is bent.,damaged,damaged,1,negative,plain
+M006,Leaking all over the box when it came.,damaged,damaged,1,negative,paraphrase
+M007,The ceramic mug came in two pieces.,damaged,damaged,1,negative,hard
+M008,"Looks like someone sat on the parcel, it is totally flattened and unusable.",damaged,damaged,1,negative,hard
+M009,"It is not damaged, I just do not want it anymore.",damaged,changed_mind,0,neutral,negation
+M010,"No damage at all, works great, but I would like to return it.",damaged,changed_mind,0,neutral,negation
+M011,The box is not broken but the charger does not work.,damaged,defective,0,negative,negation
+M012,"Nothing is broken, the colour is just different from the photo.",damaged,not_as_described,0,negative,negation
+M013,"Without any scratches or cracks, the phone looks perfect.",damaged,unclear,0,positive,negation
+M014,Item was not damaged in transit.,damaged,unclear,0,neutral,negation
+M015,The blender does not turn on at all.,defective,defective,1,negative,plain
+M016,Stopped working after two days.,defective,defective,1,negative,plain
+M017,"Dead on arrival, no power.",defective,defective,1,negative,plain
+M018,Faulty zipper that keeps coming apart.,defective,defective,1,negative,plain
+M019,The speaker keeps cutting out and one side is silent.,defective,defective,1,negative,hard
+M020,Battery drains in ten minutes and the device overheats.,defective,defective,1,negative,hard
+M021,"It works perfectly fine, I simply ordered the wrong colour.",defective,changed_mind,0,neutral,negation
+M022,It isn't working properly.,defective,defective,1,negative,negation
+M023,It does not look damaged but it does not turn on.,damaged,defective,0,negative,negation
+M024,I received a blue one instead of the black I ordered.,wrong_item,wrong_item,1,negative,hard
+M025,They sent the wrong size and the wrong colour.,wrong_item,wrong_item,1,negative,plain
+M026,This is not what I ordered at all.,wrong_item,wrong_item,1,negative,plain
+M027,"Different product in the box, it is a phone case not headphones.",wrong_item,wrong_item,1,negative,plain
+M028,Looks different from the pictures on the listing.,not_as_described,not_as_described,1,negative,plain
+M029,"Material is nothing like advertised, feels like cheap plastic.",not_as_described,not_as_described,1,negative,plain
+M030,"I think this is a counterfeit, the logo is misspelled.",not_as_described,not_as_described,1,negative,plain
+M031,The product is much smaller than the listing made it seem.,not_as_described,not_as_described,1,negative,hard
+M032,"Not as described, the listing said waterproof and it leaks.",not_as_described,not_as_described,1,negative,hard
+M033,I was told it would be waterproof but it is not.,not_as_described,not_as_described,1,negative,hard
+M034,"Way too small, does not fit my son.",size_issue,size_issue,1,neutral,plain
+M035,The shoes are too tight and I need a bigger size.,size_issue,size_issue,1,neutral,plain
+M036,Doesn't fit properly.,size_issue,size_issue,1,neutral,plain
+M037,Runs a full size small compared to the chart.,size_issue,size_issue,1,neutral,hard
+M038,I changed my mind and don't want it anymore.,changed_mind,changed_mind,1,neutral,plain
+M039,"Bought it by mistake, please refund.",changed_mind,changed_mind,1,neutral,plain
+M040,Found the same product cheaper elsewhere.,changed_mind,changed_mind,1,neutral,hard
+M041,No longer need it after my trip got cancelled.,changed_mind,changed_mind,1,neutral,plain
+M042,Parcel never arrived.,not_delivered,not_delivered,1,negative,plain
+M043,Tracking says delivered but I did not receive anything.,not_delivered,not_delivered,1,negative,plain
+M044,Still waiting for my order after three weeks.,not_delivered,not_delivered,1,negative,hard
+M045,The courier left it somewhere and I never got it.,not_delivered,not_delivered,1,negative,plain
+M046,I changed my mind but the item is fine.,damaged,changed_mind,0,neutral,plain
+M047,"Do not like the colour, no problem with the product.",defective,changed_mind,0,neutral,negation
+M048,Honestly I do not want it any more.,damaged,changed_mind,0,neutral,plain
+M049,"Never had a problem with the product, just returning a gift.",defective,changed_mind,0,neutral,negation
+M050,There is a problem with it.,defective,unclear,0,negative,vague
+M051,"Not good, please refund.",damaged,unclear,0,negative,vague
+M052,Bad quality.,defective,unclear,0,negative,vague
+M053,Refund.,damaged,unclear,0,neutral,vague
+M054,"I am absolutely furious, this broken kettle is a disgrace!",damaged,damaged,1,negative,plain
+M055,"Hi team, unfortunately the kettle arrived broken. Could you please help? Many thanks!",damaged,damaged,1,neutral,plain
+M056,"Worst purchase ever, completely useless, it never worked.",defective,defective,1,negative,plain
+M057,"Lovely product but it is too small for me, sadly.",size_issue,size_issue,1,neutral,hard
+M058,"Great quality, I just changed my mind.",changed_mind,changed_mind,1,positive,plain
+M059,Absolutely love it but the colour is a bit different from the photo.,not_as_described,not_as_described,1,neutral,hard
+M060,"Excellent seller, but the package never arrived.",not_delivered,not_delivered,1,neutral,hard

@@ -2,5 +2,5 @@ __pycache__/
 *.db
 evidence_store/
 .pytest_cache/
-data/
+data/raw/
 reports/amazon_images/

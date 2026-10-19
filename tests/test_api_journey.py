@@ -8,7 +8,7 @@ import tempfile
 TMP = tempfile.mkdtemp()
 os.environ.setdefault("DATABASE_URL", f"sqlite:///{TMP}/test.db")
 os.environ.setdefault("EVIDENCE_DIR", f"{TMP}/evidence")
-os.environ.pop("ANTHROPIC_API_KEY", None)
+os.environ.pop("LLM_API_KEY", None)
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import pytest  # noqa: E402

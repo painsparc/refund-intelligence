@@ -74,6 +74,15 @@ Guardrails (only ever add caution): blacklisted customer and exact evidence reus
 | `refund_farming` | >= 3 refunds just under the auto-approve limit, or >= 4 refunds in 180 days with refund value >= 50% of purchases |
 | `policy_exploitation` | >= 3 refunds filed in the last 20% of the return window |
 
+## Claim NLP, sentiment and image matching (mentor feedback)
+| Part | Default (runs everywhere) | Optional stronger backend | Status |
+|---|---|---|---|
+| Claim interpretation | **negation-aware** phrase rules ("not damaged" no longer affirms damage; paraphrases like "snapped off"); flags `claim_negated_by_text`, `reason_description_mismatch`, `reason_category_conflict`, `vague_description` | zero-shot **transformer** classifier: `CLAIM_NLP=transformer` (`CLAIM_NLP_MODEL`, multilingual models work for Olist's Portuguese); falls back to the rules if it cannot load, and the output says which backend ran | rules measured on the labelled set; transformer path **not run with real weights** (no model-hub access in the build environment) - tested with an injected stand-in |
+| Text-image consistency | off | **CLIP**: `IMAGE_TEXT=clip` - EvidenceInconsistency becomes `max(100*(1-quality), 100*(1-consistency))`, flag `image_text_mismatch` | same: stand-in tested, real CLIP not run |
+| Sentiment | VADER lexicon (English) | `SENTIMENT_MODEL=<transformer>` (multilingual) | **customer-experience routing and product insights only**: an upset customer with trust index >= 60 whose claim gets friction or a decline is flagged `cx_priority` for care outreach; sentiment is stored per claim and averaged per product in the snapshot. A test proves it never changes any risk score, cost or decision. Lexicon sentiment is weak on factual complaints (see report) |
+| Evidence-reuse matching | **aHash + pHash (DCT) + ORB local features with RANSAC** (any signal marks a match; `match_methods` shows which) | - | pHash/aHash catch JPEG/resize/blur; ORB catches crops. Thresholds are calibrated on synthetic images only - re-check on Copydays and real product photos |
+Optional heavy dependencies are in `requirements-nlp.txt`. Everything above degrades gracefully: no transformer, no CLIP, no OpenCV -> the system still runs and says what it used.
+
 ## G5 Historical Intelligence & Prevention Loop (offline)
 `POST /historical/run` (or the Management View button) persists **Product Risk Snapshots**, **Vendor Risk Snapshots** and raises
 insights in the **Insight / Intervention Log**:  pattern → insight → intervention (`/apply`) → later outcome (`/evaluate`, compares
@@ -86,21 +95,24 @@ pip install -r requirements.txt
 python demo.py                          # end-to-end story in the terminal, no API key needed
 uvicorn app:app --reload                # backend  -> http://localhost:8000/docs
 streamlit run streamlit_app.py          # UI       (set API_URL if backend is elsewhere)
-pytest -q                               # 29 tests
+pytest -q                               # 43 tests
 ```
-* **Agents**: with `ANTHROPIC_API_KEY` Claude interprets image/text/history; without it only the deterministic logic runs.
+* **Agents**: with `LLM_API_KEY` (+ optional `LLM_BASE_URL`, `LLM_MODEL`; any OpenAI-compatible provider) an LLM interprets image/text/history and may nudge a risk score by at most +/-10 points; without it only the deterministic logic runs. Or plug in any provider with `intelligence.set_llm(fn)`.
 * **PostgreSQL**: `docker compose up -d` and set `DATABASE_URL` (see `.env.example`). Default is SQLite.
 * Seeded try-it orders `ORD-1001`..`ORD-1006` (customers C001-C005); `demo.py` tells each story.
 
 ## Evaluation datasets (offline; separate DB `eval_data.db`, seeded demo untouched)
-Approved composite strategy: **Olist** (orders/sellers), **UCI Online Retail II** (return-like behaviour), **Amazon Reviews 2023** (text proxy),
-**INRIA Copydays** (image-similarity ground truth) + **synthetic labelled abuse scenarios**. Sources, licences, fields and limitations:
-`docs/data_sources.md`. Precautions: cancellations are *not* refunds/fraud, review images are *not* refund evidence, synthetic labels are kept
-apart from source data (`data_provenance`, `eval_labels`).
+Approved composite strategy: **Olist** (orders/sellers **and the order-reviews file, linked to real orders**), **UCI Online Retail II** (return-like behaviour),
+**Amazon Reviews 2023** (English text proxy), **INRIA Copydays** (image-similarity ground truth), a small **hand-labelled claim set** (`data/`), and
+**synthetic customers generated from behavioural profiles that do not reference any detection threshold** (so abusers can be missed and heavy genuine
+customers flagged - the evaluation is not circular). Sources, licences, fields and limitations: `docs/data_sources.md`. Precautions: cancellations are *not*
+refunds/fraud, review images are *not* refund evidence, a bad review is *not* a refund claim, synthetic labels are kept apart from source data
+(`data_provenance`, `eval_labels`).
 ```bash
-python eval_data.py all --olist data/olist --uci data/online_retail_II.xlsx --amazon data/All_Beauty.jsonl.gz \
-       --copydays-originals data/copydays/original --copydays-variants data/copydays/variants
-# or step by step: ingest | scenarios | evaluate | manifest      (writes docs/dataset_manifest.md, docs/eval_report.md, reports/eval_results.json)
+python eval_data.py all --olist data/raw/olist --uci data/raw/online_retail_II.xlsx --amazon data/raw/All_Beauty.jsonl.gz \
+       --copydays-originals data/raw/copydays/original --copydays-variants data/raw/copydays/variants
+# step by step: ingest | scenarios | evaluate | manifest | labelling-sheet     (writes docs/dataset_manifest.md, docs/eval_report.md, reports/eval_results.json)
+python eval_data.py labelling-sheet --n 200   # random real reviews to hand-label -> save as data/manual_labels_real.csv for an independent NLP test
 ```
-`docs/pipeline_smoke_run.md` is a run on tiny fixtures only - the real report is generated by the command above.
-Open items (risk-model alignment with the proposal, diagram edits): `docs/spec_alignment.md`, `docs/diagram_changes.md`.
+`docs/pipeline_smoke_run.md` is a run on tiny fixtures only - the real report is generated by the command above (the real datasets could not be downloaded in the
+build environment). Open items: `docs/spec_alignment.md`, `docs/diagram_changes.md`.

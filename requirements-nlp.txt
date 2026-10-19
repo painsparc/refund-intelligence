@@ -1,0 +1,9 @@
+# Optional heavy backends (not needed for tests or the demo). Enable with environment variables:
+#   CLAIM_NLP=transformer     CLAIM_NLP_MODEL=MoritzLaurer/deberta-v3-base-zeroshot-v2.0   (zero-shot reason classifier; negation-aware)
+#                             or a multilingual NLI model for Olist's Portuguese reviews, e.g. MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7
+#   SENTIMENT_MODEL=<hf text-classification model with positive/negative labels>        (multilingual sentiment)
+#   IMAGE_TEXT=clip          CLIP_MODEL=openai/clip-vit-base-patch32                   (text-image consistency)
+# These need internet access to download the model weights and were NOT run in the build environment (no model-hub access): the code paths
+# are covered by tests with injected stand-in models and by fallbacks, not by real weights. Run `python eval_data.py evaluate` with them enabled.
+transformers>=4.40
+torch>=2.2

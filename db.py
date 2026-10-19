@@ -41,9 +41,9 @@ CREATE TABLE IF NOT EXISTS refund_history (id TEXT PRIMARY KEY, order_id TEXT, c
     vendor_id TEXT, category TEXT, reason TEXT, amount REAL, status TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS refund_requests (id TEXT PRIMARY KEY, order_id TEXT, customer_id TEXT, reason TEXT, amount REAL,
     description TEXT, created_at TEXT, claim_risk REAL, behaviour_risk REAL, trust_index REAL, evidence_confidence REAL, exposure_risk REAL,
-    decision TEXT, costs TEXT, flags TEXT, rationale TEXT, status TEXT, components TEXT);
+    decision TEXT, costs TEXT, flags TEXT, rationale TEXT, status TEXT, components TEXT, sentiment REAL, sentiment_label TEXT, cx_priority INTEGER);
 CREATE TABLE IF NOT EXISTS evidence (id TEXT PRIMARY KEY, claim_id TEXT, customer_id TEXT, path TEXT, sha256 TEXT,
-    ahash TEXT, width INTEGER, height INTEGER, quality REAL, created_at TEXT);
+    ahash TEXT, phash TEXT, orb TEXT, width INTEGER, height INTEGER, quality REAL, created_at TEXT);
 CREATE TABLE IF NOT EXISTS behaviour_features (customer_id TEXT PRIMARY KEY, orders_total INTEGER, refunds_total INTEGER,
     refunds_30d INTEGER, refunds_90d INTEGER, refunds_180d INTEGER, refund_value_90d REAL, refund_value_180d REAL,
     refund_value_ratio_180d REAL, return_events_180d INTEGER, return_exceptions_180d INTEGER, refund_rate REAL, updated_at TEXT);
@@ -62,9 +62,11 @@ CREATE TABLE IF NOT EXISTS eval_labels (id TEXT PRIMARY KEY, scenario_id TEXT, s
 CREATE TABLE IF NOT EXISTS source_reviews (id TEXT PRIMARY KEY, source TEXT, source_id TEXT, product_ref TEXT, rating REAL,
     title TEXT, review_text TEXT, n_images INTEGER, image_urls TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS product_risk_snapshot (id TEXT PRIMARY KEY, snapshot_at TEXT, product_id TEXT, product_name TEXT,
-    vendor_id TEXT, orders INTEGER, refunds INTEGER, refund_rate REAL, top_reasons TEXT, risk_score REAL, outlier INTEGER);
+    vendor_id TEXT, orders INTEGER, refunds INTEGER, refund_rate REAL, top_reasons TEXT, risk_score REAL, outlier INTEGER,
+    avg_sentiment REAL, avg_review_score REAL, negative_review_rate REAL, review_count INTEGER);
 CREATE TABLE IF NOT EXISTS vendor_risk_snapshot (id TEXT PRIMARY KEY, snapshot_at TEXT, vendor_id TEXT, orders INTEGER,
-    refunds INTEGER, refund_rate REAL, expected_avoidable_loss REAL, risk_score REAL, outlier INTEGER);
+    refunds INTEGER, refund_rate REAL, expected_avoidable_loss REAL, risk_score REAL, outlier INTEGER,
+    avg_review_score REAL, negative_review_rate REAL, review_count INTEGER);
 CREATE TABLE IF NOT EXISTS insight_log (id TEXT PRIMARY KEY, created_at TEXT, kind TEXT, entity_id TEXT, entity_name TEXT,
     pattern TEXT, insight TEXT, intervention TEXT, metric_name TEXT, baseline_value REAL, status TEXT, applied_at TEXT,
     applied_note TEXT, current_value REAL, outcome TEXT, evaluated_at TEXT);
@@ -148,6 +150,12 @@ def decline_refund(claim, reason=""):
     """Existing policy-decline path (stub): deterministic policy says the request is ineligible."""
     audit(claim["id"], "policy_decline", reason)
     notify_customer(claim["id"], f"Your refund request is not eligible under the refund policy ({reason}).")
+
+
+def flag_cx_priority(claim_id):
+    """Existing customer-care queue (stub): an upset, otherwise trustworthy customer gets priority outreach. Never a fraud signal."""
+    audit(claim_id, "cx_priority", "priority customer-care outreach")
+    notify_customer(claim_id, "We are sorry about the trouble - a member of our care team will contact you with priority.")
 
 
 def request_return(claim_id):

@@ -84,7 +84,7 @@ def operations_console():
     if not queue:
         st.success("Queue is empty.")
         return
-    st.dataframe(pd.DataFrame(queue)[["claim_id", "customer_id", "amount", "exposure_risk", "decision", "status", "case_id"]],
+    st.dataframe(pd.DataFrame(queue)[["claim_id", "customer_id", "amount", "exposure_risk", "decision", "status", "cx_priority", "case_id"]],
                  width="stretch", hide_index=True)
     claim_id = st.selectbox("Open a claim", [q["claim_id"] for q in queue])
     d = api("GET", f"/claims/{claim_id}")
@@ -100,6 +100,12 @@ def operations_console():
     m[4].metric("Amount", c["amount"])
     st.caption(f"Exposure risk used for expected cost = 0.6 x claim risk + 0.4 x behavioural risk = {c['exposure_risk']} "
                "(a risk-normalised proxy, not a calibrated probability). Risk scores prioritise review; they are not proof of fraud.")
+    if c.get("sentiment") is not None:
+        st.caption(f"Claim-text sentiment {c['sentiment']} ({c['sentiment_label']}) - used for customer-care routing and product insights only; "
+                   "it is never an input to any risk score or to the decision.")
+    if c.get("cx_priority"):
+        st.warning("Customer-experience priority: upset customer with a trustworthy history - care team outreach has been requested. "
+                   "This does not change the risk assessment.")
     a, b, e = st.columns(3)
     with a:
         st.markdown("**Expected cost by action** = risk exposure + customer friction + handling")
@@ -163,6 +169,8 @@ def management_view():
             st.caption(f"Customer risk: {cr.get('profiled_customers', 0)} profiled | "
                        f"{cr.get('high_behavioural_risk_customers(>=60)', 0)} with behavioural risk >= 60 | "
                        f"average trust index {cr.get('avg_trust_index')}")
+            ce = m.get("customer_experience", {})
+            st.caption(f"Customer experience: {ce.get('cx_priority_claims', 0)} priority-care claims | average claim sentiment {ce.get('avg_claim_sentiment')}")
             c1, c2 = st.columns(2)
             c1.markdown("**Abuse patterns detected**")
             c1.bar_chart(pd.Series(m["abuse_patterns"]))

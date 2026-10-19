@@ -43,7 +43,8 @@ def show(title, r):
     print(f"  decision : {r['decision'].upper()}   (claim_risk={r['claim_risk']}/100, behaviour_risk={r['behaviour_risk']}/100, "
           f"trust_index={r['trust_index']}, exposure={r['exposure_risk']}, evidence_conf={r['evidence_confidence']}/100)")
     print(f"  costs    : {r['costs']}")
-    print(f"  abuse    : {r['abuse_patterns']}")
+    print(f"  abuse    : {r['abuse_patterns']}   image-match signals: {r.get('match_methods')}")
+    print(f"  tone     : sentiment {r['sentiment']['score']} ({r['sentiment']['label']}), cx_priority={r['cx_priority']}  [routing only, never a risk input]")
     print(f"  flags    : {r['flags']}")
     print(f"  why      : {r['rationale']}")
 
