@@ -779,6 +779,12 @@ def resolution_agent(claim, ev_out, beh_out, risk, d):
             f"evidence={c['request_evidence']}, review={c['manual_review']}.")
     if d["forced"]:
         base += f" Guardrails: {', '.join(d['forced'])}."
+    else:                                            # why THIS action: the cheapest eligible one, and by how much
+        ranked = sorted((a for a in d.get("eligible", []) if a in c), key=lambda a: c[a])
+        if d["action"] in ranked and len(ranked) > 1:
+            runner_up = next(a for a in ranked if a != d["action"])
+            base += (f" Selected because it has the lowest expected cost among the eligible actions ({', '.join(ranked)}): "
+                     f"{c[d['action']]} vs {c[runner_up]} for {runner_up} (difference {round(c[runner_up] - c[d['action']], 1)}).")
     if beh_out["abuse_patterns"]:
         base += f" Abuse patterns: {', '.join(beh_out['abuse_patterns'])}."
     if ev_out["flags"]:

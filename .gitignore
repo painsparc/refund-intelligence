@@ -2,5 +2,7 @@ __pycache__/
 *.db
 evidence_store/
 .pytest_cache/
+.venv/
 data/raw/
+data/manual_label_sheet.csv
 reports/amazon_images/

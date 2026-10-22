@@ -77,9 +77,9 @@ Guardrails (only ever add caution): blacklisted customer and exact evidence reus
 ## Claim NLP, sentiment and image matching (mentor feedback)
 | Part | Default (runs everywhere) | Optional stronger backend | Status |
 |---|---|---|---|
-| Claim interpretation | **negation-aware** phrase rules ("not damaged" no longer affirms damage; paraphrases like "snapped off"); flags `claim_negated_by_text`, `reason_description_mismatch`, `reason_category_conflict`, `vague_description` | zero-shot **transformer** classifier: `CLAIM_NLP=transformer` (`CLAIM_NLP_MODEL`, multilingual models work for Olist's Portuguese); falls back to the rules if it cannot load, and the output says which backend ran | rules measured on the labelled set; transformer path **not run with real weights** (no model-hub access in the build environment) - tested with an injected stand-in |
+| Claim interpretation | **negation-aware** phrase rules ("not damaged" no longer affirms damage; paraphrases like "snapped off"); flags `claim_negated_by_text`, `reason_description_mismatch`, `reason_category_conflict`, `vague_description` | zero-shot **transformer** classifier: `CLAIM_NLP=transformer` (`CLAIM_NLP_MODEL`, multilingual models work for Olist's Portuguese); falls back to the rules if it cannot load, and the output says which backend ran | rules measured on the labelled set; zero-shot transformer **run with real weights**: 0.63 vs 0.73 category accuracy for the rules on the developer set, so **rules stay default** (`docs/backend_validation.md`) |
 | Text-image consistency | off | **CLIP**: `IMAGE_TEXT=clip` - EvidenceInconsistency becomes `max(100*(1-quality), 100*(1-consistency))`, flag `image_text_mismatch` | same: stand-in tested, real CLIP not run |
-| Sentiment | VADER lexicon (English) | `SENTIMENT_MODEL=<transformer>` (multilingual) | **customer-experience routing and product insights only**: an upset customer with trust index >= 60 whose claim gets friction or a decline is flagged `cx_priority` for care outreach; sentiment is stored per claim and averaged per product in the snapshot. A test proves it never changes any risk score, cost or decision. Lexicon sentiment is weak on factual complaints (see report) |
+| Sentiment | VADER lexicon (English) | `SENTIMENT_MODEL=<transformer>` (multilingual) | **customer-experience routing and product insights only**: an upset customer with trust index >= 60 whose claim gets friction or a decline is flagged `cx_priority` for care outreach; sentiment is stored per claim and averaged per product in the snapshot. A test proves it never changes any risk score, cost or decision. Lexicon sentiment is weak on factual complaints (negative recall 0.22); **recommended: `SENTIMENT_MODEL=cardiffnlp/twitter-xlm-roberta-base-sentiment-multilingual`** (real-weights run: accuracy 0.58, negative recall 0.76 on the developer set; re-check on independent labels) |
 | Evidence-reuse matching | **aHash + pHash (DCT) + ORB local features with RANSAC** (any signal marks a match; `match_methods` shows which) | - | pHash/aHash catch JPEG/resize/blur; ORB catches crops. Thresholds are calibrated on synthetic images only - re-check on Copydays and real product photos |
 Optional heavy dependencies are in `requirements-nlp.txt`. Everything above degrades gracefully: no transformer, no CLIP, no OpenCV -> the system still runs and says what it used.
 
@@ -95,7 +95,7 @@ pip install -r requirements.txt
 python demo.py                          # end-to-end story in the terminal, no API key needed
 uvicorn app:app --reload                # backend  -> http://localhost:8000/docs
 streamlit run streamlit_app.py          # UI       (set API_URL if backend is elsewhere)
-pytest -q                               # 43 tests
+pytest -q                               # 53 tests
 ```
 * **Agents**: with `LLM_API_KEY` (+ optional `LLM_BASE_URL`, `LLM_MODEL`; any OpenAI-compatible provider) an LLM interprets image/text/history and may nudge a risk score by at most +/-10 points; without it only the deterministic logic runs. Or plug in any provider with `intelligence.set_llm(fn)`.
 * **PostgreSQL**: `docker compose up -d` and set `DATABASE_URL` (see `.env.example`). Default is SQLite.
@@ -114,5 +114,18 @@ python eval_data.py all --olist data/raw/olist --uci data/raw/online_retail_II.x
 # step by step: ingest | scenarios | evaluate | manifest | labelling-sheet     (writes docs/dataset_manifest.md, docs/eval_report.md, reports/eval_results.json)
 python eval_data.py labelling-sheet --n 200   # random real reviews to hand-label -> save as data/manual_labels_real.csv for an independent NLP test
 ```
+### Finishing the evaluation on real data (what is automated, what needs people)
+```bash
+python scripts/get_datasets.py --all [--olist-zip kaggle.zip] [--skip-copydays-crop]   # download + SHA-256 record into data/raw/ (git-ignored)
+python scripts/run_full_pipeline.py --require-real                                     # ingest, evaluate, manifest, pytest, live FastAPI + Streamlit + historical loop
+                                                                                       #  -> docs/eval_report.md, docs/dataset_manifest.md, reports/final_test_results.md
+python eval_data.py labelling-sheet --n 200; python label_tools.py split               # English complaint-heavy sheet (Amazon, 50 % 1-2 star); --label-source olist|all; independent labels: see docs/labelling_guidelines.md
+python label_tools.py reconcile; python label_tools.py finalize                        #  -> data/manual_labels_real.csv (needs two humans)
+pip install -r requirements-nlp.txt; python validate_backends.py --pairs data/image_text_pairs.csv   # real transformer / CLIP weights -> docs/backend_validation.md
+```
+New in the evaluation report: Olist review-link audit (why each review is or is not linked), missing-value checks and source-to-schema mapping in the manifest,
+Copydays thresholds tuned on a validation split and reported on a held-out test split (recall / false-match rate per transformation), the expected-cost sweep over
+`COST_SCALE` (`docs/cost_calibration.md`), and `reports/nlp_error_analysis.json` (the negative reviews the sentiment baseline misses).
+
 `docs/pipeline_smoke_run.md` is a run on tiny fixtures only - the real report is generated by the command above (the real datasets could not be downloaded in the
-build environment). Open items: `docs/spec_alignment.md`, `docs/diagram_changes.md`.
+build environment). Open items: `docs/spec_alignment.md`, `docs/diagram_changes.md`; decisions taken and what is still open: `docs/decisions.md`.

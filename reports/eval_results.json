@@ -1,0 +1,400 @@
+{
+  "generated_at": "2026-10-22T07:33:36",
+  "database": "sqlite:///eval_data.db",
+  "gate_on_olist_orders": {
+    "status": "run",
+    "data": "Olist (real order timestamps, categories, amounts) + ASSUMED policy + synthetic claim timing",
+    "orders": 1500,
+    "checks": 9000,
+    "agreement": 1.0,
+    "disagreements_sample": [],
+    "note": "validates the deterministic gate implementation on real timestamps; says nothing about policy realism"
+  },
+  "behaviour_on_uci_returns": {
+    "status": "run",
+    "data": "UCI Online Retail II cancellation invoices as RETURN-LIKE PROXY events (unlabelled, not fraud)",
+    "customers_with_cancellations_evaluated": 1230,
+    "pattern_flag_counts": {
+      "serial_refunder": 68,
+      "return_abuse": 0,
+      "fake_defect_pattern": 0,
+      "refund_farming": 2,
+      "policy_exploitation": 0
+    },
+    "pattern_flag_rate": {
+      "serial_refunder": 0.0553,
+      "return_abuse": 0.0,
+      "fake_defect_pattern": 0.0,
+      "refund_farming": 0.0016,
+      "policy_exploitation": 0.0
+    },
+    "behaviour_risk_0_100": {
+      "p50": 15.1,
+      "p90": 36.7,
+      "p99": 45.9,
+      "share_ge_50": 0.0008
+    },
+    "refunds_90d": {
+      "p50": 1,
+      "p90": 2,
+      "max": 23
+    },
+    "refund_rate": {
+      "p50": 0.3333,
+      "p90": 1.0
+    },
+    "note": "flag RATES on real, unlabelled behaviour - NOT precision/recall/FPR. UCI has no delivery dates, so timing patterns cannot fire; buyers are largely wholesalers. Cancellations are not confirmed refunds."
+  },
+  "evidence_reuse_on_copydays": {
+    "status": "not_run",
+    "reason": "Copydays not ingested"
+  },
+  "evidence_reuse_copydays_validation_test_split": {
+    "status": "not_run",
+    "reason": "Copydays not ingested"
+  },
+  "abuse_scenarios_synthetic": {
+    "status": "run",
+    "data": "SYNTHETIC labelled customers drawn from independent behavioural profiles, real order attributes where available",
+    "profiles": {
+      "normal": {
+        "abusive": 0,
+        "n": 20,
+        "intervention_rate": 0.0,
+        "any_pattern_flag_rate": 0.1
+      },
+      "heavy_legit": {
+        "abusive": 0,
+        "n": 20,
+        "intervention_rate": 0.0,
+        "any_pattern_flag_rate": 0.05
+      },
+      "serial_refunder": {
+        "abusive": 1,
+        "n": 20,
+        "intervention_rate": 0.05,
+        "any_pattern_flag_rate": 0.3,
+        "target_pattern": "serial_refunder",
+        "target_pattern_recall": 0.2
+      },
+      "refund_farmer": {
+        "abusive": 1,
+        "n": 20,
+        "intervention_rate": 0.05,
+        "any_pattern_flag_rate": 0.75,
+        "target_pattern": "refund_farming",
+        "target_pattern_recall": 0.7
+      },
+      "policy_exploiter": {
+        "abusive": 1,
+        "n": 20,
+        "intervention_rate": 0.05,
+        "any_pattern_flag_rate": 0.65,
+        "target_pattern": "policy_exploitation",
+        "target_pattern_recall": 0.6
+      },
+      "return_abuser": {
+        "abusive": 1,
+        "n": 20,
+        "intervention_rate": 0.0,
+        "any_pattern_flag_rate": 0.3,
+        "target_pattern": "return_abuse",
+        "target_pattern_recall": 0.3
+      },
+      "evidence_reuse": {
+        "abusive": 1,
+        "n": 20,
+        "intervention_rate": 0.1,
+        "any_pattern_flag_rate": 0.95,
+        "reuse_flag_recall": 0.95,
+        "recall_by_transformation": {
+          "blur": 1.0,
+          "crop": 1.0,
+          "jpeg": 1.0,
+          "resize": 1.0,
+          "strong": 0.75
+        },
+        "detected_by_orb_only": 0.35
+      }
+    },
+    "false_flags_on_legitimate_profiles": {
+      "normal": {
+        "serial_refunder": 0.0,
+        "return_abuse": 0.0,
+        "fake_defect_pattern": 0.1,
+        "refund_farming": 0.0,
+        "policy_exploitation": 0.0,
+        "any_reuse_flag": 0.1
+      },
+      "heavy_legit": {
+        "serial_refunder": 0.0,
+        "return_abuse": 0.0,
+        "fake_defect_pattern": 0.0,
+        "refund_farming": 0.05,
+        "policy_exploitation": 0.0,
+        "any_reuse_flag": 0.0
+      }
+    },
+    "pattern_flag_as_classifier (any abuse pattern or evidence-reuse flag)": {
+      "tp": 59,
+      "fp": 3,
+      "fn": 41,
+      "tn": 37,
+      "precision": 0.952,
+      "recall": 0.59,
+      "false_positive_rate": 0.075,
+      "f1": 0.728
+    },
+    "decision_as_classifier_vs_cost_scale": {
+      "handling/friction cost x1.0": {
+        "tp": 5,
+        "fp": 0,
+        "fn": 95,
+        "tn": 40,
+        "precision": 1.0,
+        "recall": 0.05,
+        "false_positive_rate": 0.0,
+        "f1": 0.095
+      },
+      "handling/friction cost x0.5": {
+        "tp": 10,
+        "fp": 0,
+        "fn": 90,
+        "tn": 40,
+        "precision": 1.0,
+        "recall": 0.1,
+        "false_positive_rate": 0.0,
+        "f1": 0.182
+      },
+      "handling/friction cost x0.2": {
+        "tp": 29,
+        "fp": 2,
+        "fn": 71,
+        "tn": 38,
+        "precision": 0.935,
+        "recall": 0.29,
+        "false_positive_rate": 0.05,
+        "f1": 0.443
+      },
+      "handling/friction cost x0.1": {
+        "tp": 55,
+        "fp": 5,
+        "fn": 45,
+        "tn": 35,
+        "precision": 0.917,
+        "recall": 0.55,
+        "false_positive_rate": 0.125,
+        "f1": 0.687
+      }
+    },
+    "note": "the generator describes HOW customers behave and never references a detection threshold, so the system can miss abusers (recall < 1) and flag heavy genuine customers (false positives > 0). Still synthetic: it shows how the pipeline separates profiles, not real-world fraud performance. Decisions depend on the cost matrix scale (handling 100, limit 300 here); see the table by cost scale and set COST_SCALE for the deployment."
+  },
+  "cost_calibration_synthetic": {
+    "status": "run",
+    "data": "SYNTHETIC labelled scenarios run through the real graph at each COST_SCALE (see docs/cost_calibration.md)",
+    "by_cost_scale": {
+      "x1.0": {
+        "tp": 5,
+        "fp": 0,
+        "fn": 95,
+        "tn": 40,
+        "precision": 1.0,
+        "recall": 0.05,
+        "false_positive_rate": 0.0,
+        "f1": 0.095,
+        "action_mix": "auto_approve=96%, refund_after_return=4%",
+        "manual_review_share": 0.0
+      },
+      "x0.2": {
+        "tp": 29,
+        "fp": 2,
+        "fn": 71,
+        "tn": 38,
+        "precision": 0.935,
+        "recall": 0.29,
+        "false_positive_rate": 0.05,
+        "f1": 0.443,
+        "action_mix": "auto_approve=78%, refund_after_return=11%, request_evidence=1%, manual_review=10%",
+        "manual_review_share": 0.1
+      },
+      "x0.1": {
+        "tp": 55,
+        "fp": 5,
+        "fn": 45,
+        "tn": 35,
+        "precision": 0.917,
+        "recall": 0.55,
+        "false_positive_rate": 0.125,
+        "f1": 0.687,
+        "action_mix": "auto_approve=57%, refund_after_return=16%, request_evidence=1%, manual_review=26%",
+        "manual_review_share": 0.257
+      },
+      "x0.05": {
+        "tp": 73,
+        "fp": 10,
+        "fn": 27,
+        "tn": 30,
+        "precision": 0.88,
+        "recall": 0.73,
+        "false_positive_rate": 0.25,
+        "f1": 0.798,
+        "action_mix": "auto_approve=41%, refund_after_return=15%, request_evidence=1%, manual_review=43%",
+        "manual_review_share": 0.429
+      }
+    },
+    "recommended_cost_scale": {
+      "scale": 0.1,
+      "rule": "best recall among scales with false-positive rate <= 0.15",
+      "precision": 0.917,
+      "recall": 0.55,
+      "false_positive_rate": 0.125,
+      "action_mix": "auto_approve=57%, refund_after_return=16%, request_evidence=1%, manual_review=26%"
+    },
+    "break_even_claim_amount_for_manual_review_vs_auto_approve": {
+      "exposure risk 0.2": {
+        "x1.0": 649.4,
+        "x0.2": 129.9,
+        "x0.1": 64.9,
+        "x0.05": 32.5
+      },
+      "exposure risk 0.4": {
+        "x1.0": 279.3,
+        "x0.2": 55.9,
+        "x0.1": 27.9,
+        "x0.05": 14.0
+      },
+      "exposure risk 0.6": {
+        "x1.0": 177.9,
+        "x0.2": 35.6,
+        "x0.1": 17.8,
+        "x0.05": 8.9
+      },
+      "exposure risk 0.8": {
+        "x1.0": 130.5,
+        "x0.2": 26.1,
+        "x0.1": 13.1,
+        "x0.05": 6.5
+      }
+    },
+    "scenario_claim_amounts": {
+      "abusive_median": 71.96,
+      "legitimate_median": 58.31
+    },
+    "note": "Costs here are in the synthetic claims' currency units; choose COST_SCALE from the deployment's real claim sizes and review capacity, not from these synthetic labels alone. Exposure risk is the 0-1 proxy (0.6 CR + 0.4 BR)/100, so an abusive claim only changes the decision when amount x risk is large enough to beat the handling cost. A recall of 0 at x1.0 means 'every synthetic claim was too small to justify a 100-unit review at its risk', not that the detectors found nothing: see the pattern-flag classifier in component 4. Set COST_SCALE via the environment; defaults are unchanged."
+  },
+  "claim_nlp_on_labelled_set": {
+    "status": "run",
+    "data": "hand-labelled claim texts (see data/README.md for who labelled them)",
+    "sets": {
+      "developer-authored set": {
+        "n": 60,
+        "legacy substring keywords | category_accuracy": 0.45,
+        "legacy substring keywords | category_macro_F1": 0.519,
+        "legacy substring keywords | accuracy_negation_cases": 0.091,
+        "legacy substring keywords | accuracy_paraphrase_cases": 0.0,
+        "legacy substring keywords | accuracy_hard_cases": 0.214,
+        "legacy substring keywords | unsupported-claim detection precision": 0.303,
+        "legacy substring keywords | unsupported-claim detection recall": 0.625,
+        "rules (negation-aware, current default) | category_accuracy": 0.733,
+        "rules (negation-aware, current default) | category_macro_F1": 0.77,
+        "rules (negation-aware, current default) | accuracy_negation_cases": 0.636,
+        "rules (negation-aware, current default) | accuracy_paraphrase_cases": 1.0,
+        "rules (negation-aware, current default) | accuracy_hard_cases": 0.214,
+        "rules (negation-aware, current default) | unsupported-claim detection precision": 0.577,
+        "rules (negation-aware, current default) | unsupported-claim detection recall": 0.938,
+        "sentiment | backend": "vader (English only)",
+        "sentiment | accuracy_3class": 0.4,
+        "sentiment | recall_of_negative": 0.216,
+        "sentiment | negative_reviews_missed": 29,
+        "sentiment | false_negative_alarms": 1
+      }
+    },
+    "claim_nlp_backend_active": "rules (transformer not enabled / not loadable)",
+    "note": "the developer-authored set is a regression/sanity set, not an independent benchmark (the same person wrote the rules). A transformer backend is evaluated here only when CLAIM_NLP=transformer loads; text sentiment is English-only with the default lexicon. team labels of real reviews: file data\\manual_labels_real.csv not found misclassified examples are listed in reports/nlp_error_analysis.json."
+  },
+  "olist_reviews_real_orders": {
+    "status": "run",
+    "data": "Olist order reviews (real text and scores) linked to real Olist orders",
+    "reviews": 98465,
+    "linked_to_orders": 98465,
+    "with_comment_text": 40426,
+    "score_distribution": {
+      "1": 10884,
+      "2": 3089,
+      "3": 8126,
+      "4": 19109,
+      "5": 57257
+    },
+    "share_1_2_stars": 0.142,
+    "product_negative_review_outliers": {
+      "97f1396a5a1f7c07ba51784efdec44b8": {
+        "reviews": 10,
+        "negative_review_rate": 0.3,
+        "avg_score": 3.4
+      },
+      "2052b3c5e08893e567c2fb7778476c75": {
+        "reviews": 12,
+        "negative_review_rate": 0.25,
+        "avg_score": 3.58
+      },
+      "642a40d4d73b4b2604968937de13634a": {
+        "reviews": 18,
+        "negative_review_rate": 0.278,
+        "avg_score": 3.56
+      },
+      "6d2fde7d12bb6ff367dbda120ba8828e": {
+        "reviews": 11,
+        "negative_review_rate": 0.818,
+        "avg_score": 1.73
+      },
+      "8338cef8355d238f43711dcb9c0657b2": {
+        "reviews": 21,
+        "negative_review_rate": 0.333,
+        "avg_score": 3.57
+      }
+    },
+    "vendor_negative_review_outliers": {
+      "3f8034bfc6b8b4135534975d49f04c63": {
+        "reviews": 12,
+        "negative_review_rate": 0.25,
+        "avg_score": 3.75
+      },
+      "e64d65bc8dbec2accda90c58de5d1246": {
+        "reviews": 12,
+        "negative_review_rate": 0.417,
+        "avg_score": 3.08
+      },
+      "8f54d64f28a993550aa7943f12572959": {
+        "reviews": 15,
+        "negative_review_rate": 0.267,
+        "avg_score": 3.73
+      },
+      "610f72e407cdd7caaa2f8167b0163fd8": {
+        "reviews": 15,
+        "negative_review_rate": 0.267,
+        "avg_score": 3.8
+      },
+      "86bb7c4b535e49a541baf3266b1c95b1": {
+        "reviews": 15,
+        "negative_review_rate": 0.4,
+        "avg_score": 3.2
+      }
+    },
+    "note": "Olist review text is Portuguese: the default sentiment lexicon and rule classifier are English-only, so text-level NLP is NOT evaluated on it (set SENTIMENT_MODEL / CLAIM_NLP_MODEL to multilingual models to do so). Review scores are real and are used for the product/vendor insights. A low review is not a refund claim, and it is never used as a fraud signal."
+  },
+  "amazon_text_proxy": {
+    "status": "run",
+    "data": "Amazon Reviews 2023 (REVIEWS, not refund claims) - text/rating proxy",
+    "sentiment_vs_rating": {
+      "reviews_used": 4499,
+      "sign_agrees_with_rating": 0.894,
+      "backend": "vader (English only)",
+      "label": "WEAK label: star rating (<=2 negative, >=4 positive); not a human sentiment label"
+    },
+    "reviews": 5000,
+    "with_images": 599,
+    "rating_le_2": 636,
+    "rating_le_2_with_defect_words": 31,
+    "note": "no refund labels exist here; review images are not refund evidence and are not in the evidence table"
+  }
+}

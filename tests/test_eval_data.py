@@ -329,3 +329,171 @@ def test_end_to_end_evaluation_on_fixtures(tmp_path, olist):
     os.remove(ed.LOG_PATH())
     out = ed.evaluate()
     assert out["evidence_reuse_on_copydays"]["status"] == "not_run" and out["olist_reviews_real_orders"]["status"] == "not_run"
+    for k in ("evidence_reuse_copydays_validation_test_split", "cost_calibration_synthetic"):
+        assert out[k]["status"] == "not_run"
+
+
+# ----------------------------------------------------------------------------- Priority fixes: link audit, split evaluation, cost sweep, labelling
+def test_olist_review_link_audit_explains_every_unlinked_review(olist):
+    info = ed.ingest_olist(olist, limit=None)
+    a = info["cleaning"]["review_link_audit"]
+    assert a["reviews_in_raw_file"] == info["files"]["olist_order_reviews_dataset.csv"]
+    assert a["linked_and_loaded"] == info["loaded"]["reviews"] == 33
+    unlinked = a["reviews_in_raw_file"] - a["linked_and_loaded"]
+    assert a["order_id_absent_from_raw_orders_file (join impossible)"] + a["order_exists_but_not_loaded (cleaning or --olist-limit sampling)"] <= unlinked
+    assert unlinked == info["cleaning"]["reviews_not_linked_to_a_loaded_order"]
+    assert (a["  of which order removed by cleaning (e.g. order has no items)"] + a["  of which order removed by --olist-limit sampling"]
+            == a["order_exists_but_not_loaded (cleaning or --olist-limit sampling)"])
+
+
+def test_manifest_has_missing_value_checks_and_schema_mapping(tmp_path, olist):
+    ed.ingest_olist(olist, limit=None)
+    ed.write_manifest()
+    md = open(os.path.join(ed.DOCS, "dataset_manifest.md")).read()
+    assert "Missing-value checks" in md and "| orders.delivered_at |" in md and "Source-to-schema mapping" in md and "review_link_audit" in md
+    assert "Download record" in md
+
+
+def test_copydays_validation_test_split_never_tunes_on_the_test_part(tmp_path):
+    orig, var = make_copydays(str(tmp_path / "cd"))
+    ed.ingest_copydays(orig, var, key_len=6)
+    res = ed.eval_copydays_split(val_frac=0.4, seed=7, max_false_match=0.01)
+    assert res["status"] == "run"
+    sp = res["split"]
+    assert sp["validation_originals"] + sp["test_originals"] == 6 and sp["validation_originals"] >= 2 and sp["test_originals"] >= 2
+    assert sp["validation_variants"] + sp["test_variants"] == 12                     # a variant always stays with its original
+    assert set(res["tuned_on_validation"]) >= {"ahash", "phash"}
+    allrow = res["test_by_variant_type"]["ALL TYPES"]
+    assert allrow["n_variants"] == sp["test_variants"] and 0.0 <= allrow["recall combined, tuned on validation"] <= 1.0
+    assert allrow["recall combined, current system thresholds"] == 1.0                # jpeg + crop copies of synthetic images are found
+    assert ai.PHASH_MAX_HAMMING == 8 and ai.SIMILAR_MAX_HAMMING == 5                  # the evaluation never changes the live thresholds
+    again = ed.eval_copydays_split(val_frac=0.4, seed=7, max_false_match=0.01)
+    assert again["split"] == sp                                                       # reproducible split
+    tiny = tmp_path / "tiny"
+    o2, v2 = make_copydays(str(tiny))
+    for f in list(pathlib.Path(o2).glob("*"))[2:]:
+        f.unlink()
+    ed.ingest_copydays(o2, v2, key_len=6)
+    assert ed.eval_copydays_split()["status"] == "not_run"                            # too few originals to split honestly
+
+
+def test_cost_calibration_sweep_is_monotonic_and_restores_the_scale(olist):
+    ed.ingest_olist(olist, limit=None)
+    ed.generate_scenarios(n=4, seed=7)
+    res = ed.eval_cost_calibration(scales=(1.0, 0.1, 0.01), max_fpr=0.5)
+    assert res["status"] == "run" and ai.COST_SCALE == 1.0
+    t = res["by_cost_scale"]
+    assert t["x0.01"]["tp"] + t["x0.01"]["fn"] == t["x1.0"]["tp"] + t["x1.0"]["fn"]    # same labelled claims at every scale
+    assert t["x0.01"]["recall"] >= t["x1.0"]["recall"]                                 # cheaper review -> never fewer interventions on abusers
+    assert t["x0.01"]["false_positive_rate"] >= t["x1.0"]["false_positive_rate"] - 1e-9
+    be = res["break_even_claim_amount_for_manual_review_vs_auto_approve"]
+    assert be["exposure risk 0.8"]["x1.0"] < be["exposure risk 0.4"]["x1.0"] < be["exposure risk 0.2"]["x1.0"]   # riskier claim -> smaller amount justifies review
+    assert be["exposure risk 0.4"]["x0.1"] < be["exposure risk 0.4"]["x1.0"]
+    assert res["recommended_cost_scale"]["scale"] in (1.0, 0.1, 0.01)
+
+
+def test_break_even_amount_matches_the_decision_engine():
+    """The analytic break-even in the report must agree with expected_cost_decision on the same numbers."""
+    for scale in (1.0, 0.2):
+        for risk in (0.4, 0.8):
+            slope = risk * (ai.EXPOSURE_FACTOR["auto_approve"] - ai.EXPOSURE_FACTOR["manual_review"]) - (1 - risk) * ai.FRICTION_RATE["manual_review"]
+            amt = scale * (ai.HANDLING["manual_review"] + ai.FRICTION_FIXED["manual_review"]) / slope
+            old, ai.COST_SCALE = ai.COST_SCALE, scale
+            try:
+                above, below = ai.cost_table(amt * 1.2, risk), ai.cost_table(amt * 0.8, risk)
+            finally:
+                ai.COST_SCALE = old
+            assert above["manual_review"]["total"] < above["auto_approve"]["total"]
+            assert below["manual_review"]["total"] > below["auto_approve"]["total"]
+
+
+def test_two_annotator_labelling_workflow(tmp_path):
+    import csv
+    import label_tools as lt
+    assert lt.cohen_kappa(["a", "a", "b", "b"], ["a", "a", "b", "b"]) == 1.0
+    assert lt.cohen_kappa(["a", "b"], ["b", "a"]) == -1.0
+    assert lt.cohen_kappa(["a", "a"], ["a", "a"]) is None                              # undefined, reported as such
+    sheet, d = tmp_path / "sheet.csv", str(tmp_path / "lab")
+    rows = [dict(id=f"R{i}", text=t, claimed_reason="", label_category="", text_supports_claim="", label_sentiment="", tag="", source="olist", rating="1")
+            for i, t in enumerate(["it arrived cracked", "works great", "wrong colour sent", "never arrived", "too small for me", "arrived fine"])]
+    with open(sheet, "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        w.writeheader(), w.writerows(rows)
+    pa, pb = lt.split(str(sheet), d, seed=7)
+    a, b = lt.read(pa), lt.read(pb)
+    assert [r["claimed_reason"] for r in a] == [r["claimed_reason"] for r in b] and all(r["claimed_reason"] in lt.REASONS for r in a)
+    assert "rating" not in a[0] and all(r["label_category"] == "" for r in a)           # blind copies, no star ratings
+    with pytest.raises(SystemExit):                                                    # blank labels are refused
+        lt.reconcile(d)
+    cats = ["damaged", "unclear", "wrong_item", "not_delivered", "size_issue", "unclear"]
+    sents = ["negative", "positive", "negative", "negative", "neutral", "positive"]
+    for r, c, s in zip(a, cats, sents):
+        r.update(label_category=c, text_supports_claim="1", label_sentiment=s)
+    for r, c, s in zip(b, cats, sents):
+        r.update(label_category=c, text_supports_claim="1", label_sentiment=s)
+    b[1]["label_sentiment"], b[2]["text_supports_claim"] = "neutral", "0"             # two disagreements
+    for p, rs in ((pa, a), (pb, b)):
+        lt.write(p, rs, list(rs[0]))
+    rep = lt.reconcile(d)
+    assert rep["n"] == 6 and rep["rows_with_any_disagreement"] == 2
+    assert rep["fields"]["label_category"]["raw_agreement"] == 1.0 and rep["fields"]["label_sentiment"]["disagreements"] == 1
+    out = str(tmp_path / "manual_labels_real.csv")
+    orig_sheet = lt.SHEET
+    lt.SHEET = str(sheet)
+    try:
+        with pytest.raises(SystemExit):                                                # unresolved disagreements block the final file
+            lt.finalize(d, out)
+        dis = lt.read(os.path.join(d, "disagreements.csv"))
+        for r in dis:
+            r["final_label_sentiment"] = r["final_label_sentiment"] or "negative"
+            r["final_text_supports_claim"] = r["final_text_supports_claim"] or "1"
+        lt.write(os.path.join(d, "disagreements.csv"), dis, list(dis[0]))
+        path, n = lt.finalize(d, out)
+    finally:
+        lt.SHEET = orig_sheet
+    final = lt.read(path)
+    assert n == 6 and set(final[0]) == set(lt.OUT_COLUMNS) and all(r["tag"] == "real" for r in final)
+    res = ed._eval_label_file(path)                                                    # the evaluation can consume the reconciled file
+    assert res["n"] == 6 and "errors" in res
+
+
+def test_backend_validation_fallback_keeps_the_rules_running(monkeypatch):
+    import validate_backends as vb
+    for k in ("CLAIM_NLP", "CLAIM_NLP_MODEL", "IMAGE_TEXT", "CLIP_MODEL", "SENTIMENT_MODEL"):
+        monkeypatch.setenv(k, "x")
+    try:
+        fb = vb.validate_fallback()
+    finally:
+        vb.reset_backends()
+    assert fb["fallback_ok"] and fb["backend_reported"] == "rules" and fb["category"] == "damaged"
+    assert vb.auc([0.9, 0.8, 0.2, 0.1], [1, 1, 0, 0]) == 1.0 and vb.auc([0.5], [1]) is None
+
+
+def test_nlp_error_analysis_is_written_for_inspection():
+    res = ed.eval_nlp()
+    errs = json.load(open(os.path.join(ed.REPORTS, "nlp_error_analysis.json")))
+    s = errs["developer-authored set"]
+    assert set(s) == {"sentiment_negative_missed", "sentiment_false_negative_alarms", "category_errors_rules"}
+    assert len(s["sentiment_negative_missed"]) == res["sets"]["developer-authored set"]["sentiment | negative_reviews_missed"] > 0
+
+
+def test_resolution_rationale_explains_why_the_action_was_selected():
+    risk = {"claim_risk": 20.0, "behaviour_risk": 10.0, "trust_index": 90.0}
+    costs = {"auto_approve": 10.0, "refund_after_return": 60.0, "request_evidence": 30.0, "manual_review": 105.0}
+    d = {"action": "auto_approve", "costs": costs, "forced": [], "eligible": ["auto_approve", "manual_review"]}
+    out = ai.resolution_agent({"amount": 100}, {"flags": []}, {"abuse_patterns": []}, risk, d)
+    assert "lowest expected cost" in out["rationale"] and "10.0 vs 105.0 for manual_review" in out["rationale"]
+    forced = dict(d, action="manual_review", forced=["blacklisted_customer"])
+    assert "lowest expected cost" not in ai.resolution_agent({"amount": 100}, {"flags": []}, {"abuse_patterns": []}, risk, forced)["rationale"]   # guardrail cases say so
+
+
+def test_labelling_sheet_can_be_english_only_and_complaint_heavy(tmp_path, olist):
+    import csv
+    ed.ingest_olist(olist, limit=None)
+    ed.ingest_amazon(make_amazon(str(tmp_path / "r.jsonl.gz")))
+    path = ed.write_labelling_sheet(10, 7, str(tmp_path / "s.csv"), source="amazon_reviews_2023", low_share=0.5)
+    rows = list(csv.DictReader(open(path, encoding="utf-8")))
+    assert rows and {r["source"] for r in rows} == {"amazon_reviews_2023"}
+    low = sum(1 for r in rows if float(r["rating"]) <= 2)
+    avail_low = db.q1("SELECT COUNT(*) AS n FROM source_reviews WHERE source='amazon_reviews_2023' AND rating<=2 AND TRIM(review_text)<>''")["n"]
+    assert low == min(avail_low, 5)

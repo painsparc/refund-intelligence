@@ -7,3 +7,6 @@
 # are covered by tests with injected stand-in models and by fallbacks, not by real weights. Run `python eval_data.py evaluate` with them enabled.
 transformers>=4.40
 torch>=2.2
+sentencepiece>=0.2      # tokenizer of the DeBERTa-v3 / mDeBERTa zero-shot models
+protobuf>=4.25
+accelerate>=0.30        # optional: faster / lower-memory loading

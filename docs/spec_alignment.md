@@ -21,13 +21,13 @@ proposal's model; each row says where, and what is a deliberate deviation or sti
 | Feedback | What was done | Status |
 |---|---|---|
 | Claim interpretation is keyword-based, misses negation and paraphrase; use a transformer classifier | negation-aware rules (default, measured on the labelled set); **optional zero-shot transformer backend** (`CLAIM_NLP=transformer`) with fallback | rules done and measured; **transformer path written but never run with real weights** (no model-hub access here) |
-| Add a text-image consistency check (CLIP) | optional CLIP backend (`IMAGE_TEXT=clip`) feeding EvidenceInconsistency, flag `image_text_mismatch` | **written, tested with a stand-in model, real CLIP not run** |
+| Add a text-image consistency check (CLIP) | optional CLIP backend (`IMAGE_TEXT=clip`) feeding EvidenceInconsistency, flag `image_text_mismatch`; `validate_backends.py` evaluates it on labelled pairs | **written, tested with a stand-in model; real CLIP not run (no model-hub access) - run `validate_backends.py`** |
 | Sentiment for customer-experience routing and product insights, not fraud | `sentiment`, `cx_priority` routing, per-product average sentiment; a test proves no score/cost/decision changes | done (VADER default is weak on factual complaints - see report) |
-| Average hash misses crops; use pHash or embeddings | aHash + pHash (DCT) + ORB local features with RANSAC | done; thresholds calibrated on synthetic images only |
-| Use the Olist reviews file linked to real orders | ingested and linked; used for product/vendor negative-review insights and a link-integrity check | done in code and fixture tests; **not run on the real file** |
-| Small manually labelled test set | 60 labelled claim sentences + a labelling-sheet exporter for real reviews | set is **developer-authored** (not independent); team labelling of real reviews still to do |
+| Average hash misses crops; use pHash or embeddings | aHash + pHash (DCT) + ORB local features with RANSAC; Copydays evaluation with a validation/test split of the originals (`eval_copydays_split`) | done in code and fixture tests; **real Copydays not run**; thresholds still calibrated on synthetic images only |
+| Use the Olist reviews file linked to real orders | ingested and linked; link audit explains every unlinked review; used for product/vendor negative-review insights | done in code and fixture tests; **not run on the real file** |
+| Small manually labelled test set | 60 labelled claim sentences + two-annotator workflow (`label_tools.py`: blind split, Cohen's kappa, reconciliation; `docs/labelling_guidelines.md`) | developer set is **not independent**; the independent labels **still need two people** to label (tooling and criteria done and tested) |
 | Synthetic generator independent of the detection rules | behavioural profiles (Poisson/Beta), no thresholds referenced, test-enforced | done; results now non-circular (see findings) |
-| Run the evaluation on the real datasets and share results | tooling ready (`python eval_data.py all ...`) | **not done: the real datasets could not be downloaded in the build environment** |
+| Run the evaluation on the real datasets and share results | `scripts/get_datasets.py` (verified URLs, SHA-256 record) + `scripts/run_full_pipeline.py --require-real` | **not done: the real datasets could not be downloaded in the build environment (only PyPI is reachable); run the two commands on a machine with internet** |
 
 ## Deliberate deviations (decide as a team, then make the report say the same thing)
 1. **Agent names.** Proposal: Claim Interpretation / Evidence Intelligence / Decision Intelligence Agent. Code and diagram: **Evidence & Claim Agent**
@@ -47,8 +47,16 @@ proposal's model; each row says where, and what is a deliberate deviation or sti
    `COST_SCALE` shows the trade-off. Set the scale from real claim sizes.
 3. **Negation handling is a real gain but hard cases remain.** On the labelled set the old substring matcher scored 45% category accuracy (9% on negation cases);
    the negation-aware rules 73% (64% on negation, about 21% on hard paraphrases). The 100% on 'paraphrase' cases is a sanity check only: those are phrasings the patterns were written for. Hard paraphrases are what a transformer should fix - not yet measured.
-4. **Lexicon sentiment is weak on factual complaints** ("the jar arrived cracked" is neutral to VADER): 3-class accuracy about 40% on the labelled set; only strongly
+4. **Cost-matrix scale** (see `docs/cost_calibration.md`): the "zero true positives" smoke result was a currency-scale mismatch (review cost 100 vs median claim ~85), not a detector failure; on the real-Olist-attribute run COST_SCALE 0.1 gives precision 0.93 / recall 0.54 / false-positive rate 0.10 (22 % of claims to review). The real review cost and capacity must set the scale.
+5. **Backend decision (real weights run on 2026-10-22, `docs/backend_validation.md`, developer-authored 60-row set - not independent):**
+   * **Sentiment: adopt the multilingual transformer** (`SENTIMENT_MODEL=cardiffnlp/twitter-xlm-roberta-base-sentiment-multilingual`): 3-class accuracy 0.58 vs 0.40 and
+     negative recall 0.76 vs 0.22 for VADER (29 -> 9 missed negative texts). It only drives customer-experience routing and product insights, never a score, cost or decision.
+   * **Claim reason: keep the rules as the default.** The zero-shot DeBERTa scored 0.63 category accuracy vs 0.73 for the rules, and was worse on negation (0.55 vs 0.64);
+     it was better on hard cases (0.43 vs 0.21). The rules' 100% on paraphrases is a sanity check only (the patterns were written for them). Re-decide on the independent labels.
+   * **CLIP: not validated** (needs `data/image_text_pairs.csv`).
+   * The `no-such-org/...` lines printed by `validate_backends.py` are the deliberate fallback test, not errors.
+6. **Lexicon sentiment is weak on factual complaints** ("the jar arrived cracked" is neutral to VADER): 3-class accuracy about 40% on the labelled set; only strongly
    worded complaints trigger `cx_priority`. A transformer sentiment model is the upgrade.
-5. **ORB catches crops that the hashes miss** (aHash/pHash 0% on crops; ORB about 100% at a 76% crop on synthetic images) at a small false-match cost; Copydays and real
+7. **ORB catches crops that the hashes miss** (aHash/pHash 0% on crops; ORB about 100% at a 76% crop on synthetic images) at a small false-match cost; Copydays and real
    product photos must confirm the thresholds.
-6. **Return abuse cannot be evaluated on Olist/UCI** (no return events); only synthetic/seeded data exercises it.
+8. **Return abuse cannot be evaluated on Olist/UCI** (no return events); only synthetic/seeded data exercises it.

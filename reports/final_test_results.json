@@ -1,0 +1,53 @@
+{
+  "datasets_present": {
+    "olist": true,
+    "uci": true,
+    "amazon": true,
+    "copydays": false
+  },
+  "real_data_run": false,
+  "steps": [
+    {
+      "step": "pytest -q",
+      "status": "pass",
+      "detail": "53 passed in 130.99s (0:02:10)",
+      "seconds": 135.9
+    },
+    {
+      "step": "live API workflow (FastAPI, uvicorn)",
+      "status": "pass",
+      "detail": "19/19 checks",
+      "seconds": 6.3
+    },
+    {
+      "step": "Streamlit process starts (health endpoint)",
+      "status": "pass",
+      "detail": "port 46180",
+      "seconds": 9.3
+    },
+    {
+      "step": "Streamlit pages render against the live API",
+      "status": "pass",
+      "detail": "3 pages: ['Customer Portal', 'Operations Console', 'Management View']",
+      "seconds": 14.6
+    },
+    {
+      "step": "dataset check",
+      "status": "pass",
+      "detail": "olist=yes, uci=yes, amazon=yes, copydays=NO",
+      "seconds": 0.0
+    },
+    {
+      "step": "dependency check",
+      "status": "pass",
+      "detail": "vaderSentiment, cv2 present; transformers installed",
+      "seconds": 0.0
+    },
+    {
+      "step": "evaluation (eval_data.py all)",
+      "status": "pass",
+      "detail": "all --olist data\\raw\\olist --olist-limit 0 --uci data\\raw\\online_retail_II.xlsx --amazon data\\raw\\All_Beauty.jsonl.gz --n 20 --cost-scales 1,0.2,0.1,0.05 | wrote docs/dataset_manifest.md",
+      "seconds": 764.7
+    }
+  ]
+}

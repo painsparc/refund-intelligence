@@ -1,0 +1,231 @@
+{
+  "olist": {
+    "files": {
+      "olist_orders_dataset.csv": 99441,
+      "olist_order_items_dataset.csv": 112650,
+      "olist_customers_dataset.csv": 99441,
+      "olist_products_dataset.csv": 32951,
+      "olist_order_reviews_dataset.csv": 99224
+    },
+    "missing_values_in_raw": {
+      "orders": {
+        "order_purchase_timestamp": 0,
+        "order_delivered_customer_date": 2965
+      },
+      "products": {
+        "product_category_name": 610
+      },
+      "reviews": {
+        "review_score": 0,
+        "review_comment_message": 58247
+      }
+    },
+    "cleaning": {
+      "dropped_no_purchase_timestamp": 0,
+      "dropped_no_customer_match": 0,
+      "dropped_orders_without_items": 775,
+      "sampling": "all orders loaded",
+      "products_without_category_set_to_unknown": 1416,
+      "reviews_not_linked_to_a_loaded_order": 759,
+      "review_link_audit": {
+        "reviews_in_raw_file": 99224,
+        "linked_and_loaded": 98465,
+        "order_id_absent_from_raw_orders_file (join impossible)": 0,
+        "order_exists_but_not_loaded (cleaning or --olist-limit sampling)": 759,
+        "  of which order removed by cleaning (e.g. order has no items)": 759,
+        "  of which order removed by --olist-limit sampling": 0,
+        "reviews_without_score_dropped": 0,
+        "orders_in_raw_reviews_with_more_than_one_review": 547
+      },
+      "reviews_loaded_with_empty_comment": 58039
+    },
+    "assumptions": [
+      "policy per category: window 7 days, auto-approve limit 300.0 (BRL) - NOT in the dataset"
+    ],
+    "loaded": {
+      "customers": 95420,
+      "orders": 98666,
+      "refund_history": 0,
+      "reviews": 98465
+    },
+    "notes": [
+      "customer id = customer_unique_id; customer.created_at = first purchase INSIDE the loaded sample",
+      "amount = sum of item prices (freight excluded); product/vendor = first item of the order",
+      "no refund or cancellation is converted into a refund; Olist order_status 'canceled' stays an order status",
+      "reviews are real customer text + 1-5 scores linked to real orders (Portuguese); a bad review is NOT a refund claim and NOT a fraud signal"
+    ],
+    "ingested_at": "2026-10-22T07:31:30"
+  },
+  "uci": {
+    "files": {
+      "online_retail_II.xlsx": 1067371
+    },
+    "missing_values_in_raw": {
+      "customer": 243007,
+      "desc": 4382,
+      "price": 0,
+      "qty": 0,
+      "date": 0
+    },
+    "cleaning": {
+      "dropped_no_customer_id_or_date": 243007,
+      "dropped_adjust_bad_debt_invoices": 0,
+      "dropped_non_product_stock_codes": 3738,
+      "dropped_non_positive_qty_or_price_on_sales": 61,
+      "sampling": "random sample of 3000 customers (all their invoices), seed 7"
+    },
+    "assumptions": [
+      "policy for category 'retail': window 14 days, auto-approve limit 150.0 (GBP) - NOT in the dataset",
+      "no delivery date exists: orders.delivered_at is NULL, so window/late-filing logic is not exercised on UCI"
+    ],
+    "loaded": {
+      "customers": 3000,
+      "orders": 19523,
+      "refund_history(cancellation_proxy)": 3902,
+      "cancellation_pseudo_orders": 3902
+    },
+    "notes": [
+      "C-prefixed invoices are cancellations/credit notes: stored as refund_history rows with status 'cancellation_proxy', NEVER as confirmed refunds, and NEVER labelled fraud",
+      "each cancellation also gets a pseudo-order (status 'cancellation_invoice', excluded from order counts) so joins work"
+    ],
+    "ingested_at": "2026-10-22T07:33:20"
+  },
+  "amazon_reviews_2023": {
+    "files": {
+      "All_Beauty.jsonl.gz": 5000
+    },
+    "cleaning": {
+      "limit_applied": 5000,
+      "reviews_with_empty_text_kept_flagged": 1
+    },
+    "loaded": {
+      "source_reviews": 5000,
+      "reviews_with_images": 599
+    },
+    "notes": [
+      "review images are customer REVIEW content, not refund evidence: only image URLs are stored, nothing enters `evidence`",
+      "used only as a text/rating proxy for the Evidence & Claim agent and (optionally) for image-quality distribution"
+    ],
+    "ingested_at": "2026-10-22T07:33:20"
+  },
+  "synthetic_scenarios": {
+    "seed": 7,
+    "n_per_profile": 20,
+    "templates": "real orders (cloned attributes)",
+    "profiles": {
+      "normal": {
+        "abusive": 0,
+        "orders": [
+          5,
+          12
+        ],
+        "refunds": 0.6,
+        "delay": [
+          2,
+          5
+        ],
+        "amount": [
+          0.2,
+          1.0
+        ],
+        "bad_return": 0.04
+      },
+      "heavy_legit": {
+        "abusive": 0,
+        "orders": [
+          10,
+          16
+        ],
+        "refunds": 3.5,
+        "delay": [
+          2,
+          5
+        ],
+        "amount": [
+          0.2,
+          1.0
+        ],
+        "bad_return": 0.04
+      },
+      "serial_refunder": {
+        "abusive": 1,
+        "orders": [
+          8,
+          14
+        ],
+        "refunds": 10,
+        "delay": [
+          2,
+          3
+        ],
+        "amount": [
+          0.2,
+          0.8
+        ],
+        "bad_return": 0.1,
+        "pattern": "serial_refunder"
+      },
+      "refund_farmer": {
+        "abusive": 1,
+        "orders": [
+          8,
+          14
+        ],
+        "refunds": 6,
+        "delay": [
+          2,
+          4
+        ],
+        "amount": null,
+        "bad_return": 0.05,
+        "pattern": "refund_farming"
+      },
+      "policy_exploiter": {
+        "abusive": 1,
+        "orders": [
+          8,
+          14
+        ],
+        "refunds": 5,
+        "delay": [
+          7,
+          1.5
+        ],
+        "amount": [
+          0.3,
+          0.9
+        ],
+        "bad_return": 0.05,
+        "pattern": "policy_exploitation"
+      },
+      "return_abuser": {
+        "abusive": 1,
+        "orders": [
+          8,
+          14
+        ],
+        "refunds": 4,
+        "delay": [
+          2,
+          4
+        ],
+        "amount": [
+          0.3,
+          0.9
+        ],
+        "bad_return": 0.65,
+        "pattern": "return_abuse"
+      }
+    },
+    "synthetic_rows": {
+      "data_provenance": 3138,
+      "eval_labels": 280
+    },
+    "assumptions": [
+      "policy window/limit for synthetic orders: (7, 300.0)",
+      "customers are drawn from behavioural PROFILES that do not reference any detection threshold; abusers overlap with heavy genuine customers, so recall < 100% and false positives > 0 are expected",
+      "labels are synthetic: they say how the generator made the customer, not what real fraud looks like"
+    ],
+    "ingested_at": "2026-10-22T07:33:36"
+  }
+}

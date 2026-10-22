@@ -1,0 +1,302 @@
+{
+  "developer-authored set": {
+    "sentiment_negative_missed": [
+      {
+        "id": "M001",
+        "text": "The jar arrived cracked at the base.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M003",
+        "text": "Screen is cracked.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M004",
+        "text": "The handle snapped off the first time I used it.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M005",
+        "text": "Package arrived with a big dent and the corner is bent.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M006",
+        "text": "Leaking all over the box when it came.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M007",
+        "text": "The ceramic mug came in two pieces.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M008",
+        "text": "Looks like someone sat on the parcel, it is totally flattened and unusable.",
+        "predicted": "positive",
+        "gold": "negative"
+      },
+      {
+        "id": "M011",
+        "text": "The box is not broken but the charger does not work.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M012",
+        "text": "Nothing is broken, the colour is just different from the photo.",
+        "predicted": "positive",
+        "gold": "negative"
+      },
+      {
+        "id": "M015",
+        "text": "The blender does not turn on at all.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M016",
+        "text": "Stopped working after two days.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M018",
+        "text": "Faulty zipper that keeps coming apart.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M019",
+        "text": "The speaker keeps cutting out and one side is silent.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M020",
+        "text": "Battery drains in ten minutes and the device overheats.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M022",
+        "text": "It isn't working properly.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M023",
+        "text": "It does not look damaged but it does not turn on.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M024",
+        "text": "I received a blue one instead of the black I ordered.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M026",
+        "text": "This is not what I ordered at all.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M027",
+        "text": "Different product in the box, it is a phone case not headphones.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M028",
+        "text": "Looks different from the pictures on the listing.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M029",
+        "text": "Material is nothing like advertised, feels like cheap plastic.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M030",
+        "text": "I think this is a counterfeit, the logo is misspelled.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M031",
+        "text": "The product is much smaller than the listing made it seem.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M032",
+        "text": "Not as described, the listing said waterproof and it leaks.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M033",
+        "text": "I was told it would be waterproof but it is not.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M042",
+        "text": "Parcel never arrived.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M043",
+        "text": "Tracking says delivered but I did not receive anything.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M044",
+        "text": "Still waiting for my order after three weeks.",
+        "predicted": "neutral",
+        "gold": "negative"
+      },
+      {
+        "id": "M045",
+        "text": "The courier left it somewhere and I never got it.",
+        "predicted": "neutral",
+        "gold": "negative"
+      }
+    ],
+    "sentiment_false_negative_alarms": [
+      {
+        "id": "M041",
+        "text": "No longer need it after my trip got cancelled.",
+        "predicted": "negative",
+        "gold": "neutral"
+      }
+    ],
+    "category_errors_rules": [
+      {
+        "id": "M007",
+        "text": "The ceramic mug came in two pieces.",
+        "predicted": "unclear",
+        "gold": "damaged",
+        "tag": "hard"
+      },
+      {
+        "id": "M008",
+        "text": "Looks like someone sat on the parcel, it is totally flattened and unusable.",
+        "predicted": "unclear",
+        "gold": "damaged",
+        "tag": "hard"
+      },
+      {
+        "id": "M010",
+        "text": "No damage at all, works great, but I would like to return it.",
+        "predicted": "unclear",
+        "gold": "changed_mind",
+        "tag": "negation"
+      },
+      {
+        "id": "M013",
+        "text": "Without any scratches or cracks, the phone looks perfect.",
+        "predicted": "damaged",
+        "gold": "unclear",
+        "tag": "negation"
+      },
+      {
+        "id": "M019",
+        "text": "The speaker keeps cutting out and one side is silent.",
+        "predicted": "unclear",
+        "gold": "defective",
+        "tag": "hard"
+      },
+      {
+        "id": "M020",
+        "text": "Battery drains in ten minutes and the device overheats.",
+        "predicted": "unclear",
+        "gold": "defective",
+        "tag": "hard"
+      },
+      {
+        "id": "M021",
+        "text": "It works perfectly fine, I simply ordered the wrong colour.",
+        "predicted": "wrong_item",
+        "gold": "changed_mind",
+        "tag": "negation"
+      },
+      {
+        "id": "M024",
+        "text": "I received a blue one instead of the black I ordered.",
+        "predicted": "unclear",
+        "gold": "wrong_item",
+        "tag": "hard"
+      },
+      {
+        "id": "M031",
+        "text": "The product is much smaller than the listing made it seem.",
+        "predicted": "unclear",
+        "gold": "not_as_described",
+        "tag": "hard"
+      },
+      {
+        "id": "M032",
+        "text": "Not as described, the listing said waterproof and it leaks.",
+        "predicted": "unclear",
+        "gold": "not_as_described",
+        "tag": "hard"
+      },
+      {
+        "id": "M033",
+        "text": "I was told it would be waterproof but it is not.",
+        "predicted": "unclear",
+        "gold": "not_as_described",
+        "tag": "hard"
+      },
+      {
+        "id": "M037",
+        "text": "Runs a full size small compared to the chart.",
+        "predicted": "unclear",
+        "gold": "size_issue",
+        "tag": "hard"
+      },
+      {
+        "id": "M040",
+        "text": "Found the same product cheaper elsewhere.",
+        "predicted": "unclear",
+        "gold": "changed_mind",
+        "tag": "hard"
+      },
+      {
+        "id": "M044",
+        "text": "Still waiting for my order after three weeks.",
+        "predicted": "unclear",
+        "gold": "not_delivered",
+        "tag": "hard"
+      },
+      {
+        "id": "M049",
+        "text": "Never had a problem with the product, just returning a gift.",
+        "predicted": "unclear",
+        "gold": "changed_mind",
+        "tag": "negation"
+      },
+      {
+        "id": "M056",
+        "text": "Worst purchase ever, completely useless, it never worked.",
+        "predicted": "unclear",
+        "gold": "defective",
+        "tag": "plain"
+      }
+    ]
+  }
+}

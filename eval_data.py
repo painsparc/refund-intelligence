@@ -102,6 +102,7 @@ def ingest_olist(folder, limit=20000, seed=7):
             "cleaning": {}, "assumptions": [f"policy per category: window {ASSUMED_POLICY['olist'][0]} days, auto-approve limit "
                                             f"{ASSUMED_POLICY['olist'][1]} (BRL) - NOT in the dataset"]}
     cl = info["cleaning"]
+    raw_order_ids = set(orders["order_id"])          # for the review-link audit below: which reviews CAN be joined to an order at all
     n = len(orders)
     orders = orders.dropna(subset=["order_purchase_timestamp"])
     cl["dropped_no_purchase_timestamp"] = n - len(orders)
@@ -114,6 +115,7 @@ def ingest_olist(folder, limit=20000, seed=7):
     n = len(orders)
     orders = orders[orders["order_id"].isin(total.index)]
     cl["dropped_orders_without_items"] = n - len(orders)
+    pre_sample_ids = set(orders["order_id"])          # orders that survived cleaning (before any --olist-limit sampling)
     if limit and len(orders) > limit:
         cl["sampled_down_from"] = len(orders)
         orders = orders.sample(limit, random_state=seed)
@@ -162,6 +164,18 @@ def ingest_olist(folder, limit=20000, seed=7):
         info["files"]["olist_order_reviews_dataset.csv"] = len(rv)
         info["missing_values_in_raw"]["reviews"] = missing(rv, ["review_score", "review_comment_message"])
         cl["reviews_not_linked_to_a_loaded_order"] = int(len(rv) - len(linked))
+        # link audit: WHY a review is not linked - the join data cannot support it, or the order was removed by cleaning / sampling
+        not_loaded = rv[~rv["order_id"].isin(loaded_ids)]
+        cl["review_link_audit"] = {
+            "reviews_in_raw_file": int(len(rv)),
+            "linked_and_loaded": int(len(linked)),
+            "order_id_absent_from_raw_orders_file (join impossible)": int((~not_loaded["order_id"].isin(raw_order_ids)).sum()),
+            "order_exists_but_not_loaded (cleaning or --olist-limit sampling)": int(not_loaded["order_id"].isin(raw_order_ids).sum()),
+            "  of which order removed by cleaning (e.g. order has no items)": int((not_loaded["order_id"].isin(raw_order_ids) & ~not_loaded["order_id"].isin(pre_sample_ids)).sum()),
+            "  of which order removed by --olist-limit sampling": int(not_loaded["order_id"].isin(pre_sample_ids).sum()),
+            "reviews_without_score_dropped": int(rv["review_score"].isna().sum()),
+            "orders_in_raw_reviews_with_more_than_one_review": int((rv.groupby("order_id").size() > 1).sum()),
+        }
         cl["reviews_loaded_with_empty_comment"] = int(sum(1 for r in review_rows if not (r["review_text"] or "").strip()))
     info["loaded"] = {"customers": len(cust_rows), "orders": len(order_rows), "refund_history": 0, "reviews": reviews_loaded}
     info["notes"] = ["customer id = customer_unique_id; customer.created_at = first purchase INSIDE the loaded sample",
@@ -675,9 +689,104 @@ def _run_scenarios():
             continue  # only seeds the evidence store; not scored
         reuse = any(f.startswith("evidence_") and "other_customer" in f for f in out["flags"])
         recs.append({"scenario": l["scenario"], "abusive": int(spec.get("abusive", 0)), "decision": out["decision"],
+                     "amount": float(spec["claim"]["amount"]), "exposure_risk": out.get("exposure_risk"),
                      "patterns": out["abuse_patterns"], "reuse_flag": reuse, "expect_pattern": spec.get("expect_pattern"),
                      "variant": spec.get("variant"), "methods": out.get("match_methods", []), "cx_priority": out.get("cx_priority", False)})
     return recs
+
+
+_CD_CACHE = {}
+
+
+def _copydays_distances(info, orb=True):
+    """All (variant x original) distances, computed once and cached: aHash / pHash Hamming and ORB verified inliers."""
+    ck = (info["originals_dir"], info["variants_dir"], info["key_len"], bool(orb))
+    if ck in _CD_CACHE:
+        return _CD_CACHE[ck]
+    orig, pairs, _ = copydays_pairs(info["originals_dir"], info["variants_dir"], info["key_len"])
+    sig = lambda p: ai.image_signature(open(p, "rb").read())
+    osig = {k: sig(p) for k, p in orig.items()}
+    keys = sorted(osig)
+    use_orb = bool(orb and ai.cv2 is not None)
+    stem_key = lambda p: os.path.splitext(os.path.basename(p))[0][:info["key_len"]]
+    recs = []
+    for p in pairs:
+        vs = sig(p["variant"])
+        recs.append({"type": p["type"], "key": stem_key(p["original"]),
+                     "ahash": {k: ai._hamming(vs["ahash"], osig[k]["ahash"]) for k in keys},
+                     "phash": {k: ai._hamming(vs["phash"], osig[k]["phash"]) for k in keys} if vs.get("phash") else None,
+                     "orb": {k: ai.orb_inliers(vs["orb"], osig[k]["orb"]) for k in keys} if use_orb and vs.get("orb") else None})
+    _CD_CACHE[ck] = (keys, recs, use_orb)
+    return _CD_CACHE[ck]
+
+
+def eval_copydays_split(val_frac=0.4, seed=7, max_false_match=0.001, orb=True):
+    """Threshold tuning WITHOUT touching the final evaluation set. The originals are split (seeded) into a VALIDATION part and a TEST part;
+    a variant always stays with its original, and false matches are only counted against originals inside the same part. For each method the
+    threshold with the best validation recall at a false-match rate <= max_false_match is chosen; the numbers reported are TEST-part only."""
+    info = load_log().get("copydays")
+    if not info:
+        return {"status": "not_run", "reason": "Copydays not ingested"}
+    keys, recs, use_orb = _copydays_distances(info, orb)
+    if len(keys) < 4 or not recs:
+        return {"status": "not_run", "reason": "need >= 4 originals with variants to split into validation and test"}
+    ks = list(keys)
+    random.Random(seed).shuffle(ks)
+    nval = min(max(2, int(len(ks) * val_frac)), len(ks) - 2)
+    val_keys, test_keys = set(ks[:nval]), set(ks[nval:])
+    val = [r for r in recs if r["key"] in val_keys]
+    test = [r for r in recs if r["key"] in test_keys]
+    methods = {"ahash": (list(range(0, 33)), lambda d, t: d <= t), "phash": (list(range(0, 33)), lambda d, t: d <= t)}
+    if use_orb:
+        methods["orb"] = (list(range(120, 9, -5)), lambda d, t: d >= t)      # strictest first
+    methods = {m: v for m, v in methods.items() if all(r[m] for r in recs)}
+
+    def rates(subset, keyset, rule):
+        """(recall, false-match rate) of an any-of rule {method: threshold} on a subset of variants."""
+        hit = false = 0
+        for r in subset:
+            match = lambda k: any(methods[m][1](r[m][k], t) for m, t in rule.items())
+            hit += int(match(r["key"]))
+            false += sum(1 for k in keyset if k != r["key"] and match(k))
+        return hit / max(len(subset), 1), false / max(len(subset) * max(len(keyset) - 1, 1), 1)
+
+    tuned, val_scores = {}, {}
+    for m, (cands, _) in methods.items():
+        best = None
+        for t in cands:                                   # strictest first, so ties keep the stricter threshold
+            rc, fm = rates(val, val_keys, {m: t})
+            if fm <= max_false_match and (best is None or rc > best[1]):
+                best = (t, rc, fm)
+        if best is None:
+            t = cands[0]
+            best = (t, *rates(val, val_keys, {m: t}))
+        tuned[m], val_scores[m] = best[0], {"threshold": best[0], "validation_recall": round(best[1], 4), "validation_false_match_rate": round(best[2], 6)}
+    operating = {"ahash": ai.SIMILAR_MAX_HAMMING, "phash": ai.PHASH_MAX_HAMMING, **({"orb": ai.ORB_MIN_INLIERS} if use_orb else {})}
+    operating = {m: t for m, t in operating.items() if m in methods}
+    rules = {f"{m} (tuned {'<=' if m != 'orb' else '>='}{t})": {m: t} for m, t in tuned.items()}
+    rules["combined, tuned on validation"] = dict(tuned)
+    rules["combined, current system thresholds"] = dict(operating)
+    out = {}
+    for typ in sorted({r["type"] for r in test}):
+        sub = [r for r in test if r["type"] == typ]
+        row = {"n_variants": len(sub)}
+        for name, rule in rules.items():
+            rc, fm = rates(sub, test_keys, rule)
+            row[f"recall {name}"], row[f"false-match rate {name}"] = round(rc, 4), round(fm, 6)
+        out[typ] = row
+    allrow = {"n_variants": len(test)}
+    for name, rule in rules.items():
+        rc, fm = rates(test, test_keys, rule)
+        allrow[f"recall {name}"], allrow[f"false-match rate {name}"] = round(rc, 4), round(fm, 6)
+    out["ALL TYPES"] = allrow
+    return {"status": "run", "data": "INRIA Copydays, originals split into validation (threshold tuning) and test (reported)",
+            "split": {"seed": seed, "validation_originals": len(val_keys), "test_originals": len(test_keys), "validation_variants": len(val),
+                      "test_variants": len(test), "max_false_match_rate_for_tuning": max_false_match},
+            "tuned_on_validation": val_scores, "current_system_thresholds": operating, "test_by_variant_type": out,
+            "note": "Thresholds are chosen on the validation originals only; the table is the TEST originals. With few originals the test rates are noisy "
+                    "(a false-match rate of 0 means 'none observed', not 'impossible'). To adopt tuned thresholds change SIMILAR_MAX_HAMMING / "
+                    "PHASH_MAX_HAMMING / ORB_MIN_INLIERS in intelligence.py and re-run the evaluation; this function never changes them. "
+                    "Copydays are holiday photos - confirm false matches on real product photos."}
 
 
 def _binary(recs, pred):
@@ -743,6 +852,54 @@ def eval_scenarios(scales=(1.0, 0.5, 0.2, 0.1)):
                     "table by cost scale and set COST_SCALE for the deployment."}
 
 
+def eval_cost_calibration(scales=(1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01), max_fpr=0.15):
+    """How the expected-cost layer behaves across currency/claim-size scales (COST_SCALE multiplies friction + handling costs).
+    Reports, per scale: precision / recall / false-positive rate of 'decision != auto_approve' against the SYNTHETIC abuse labels, the action mix,
+    and the break-even claim amount above which manual review is cheaper than auto-approval. Recommends the scale with the best recall whose
+    false-positive rate on legitimate profiles is <= max_fpr. Policy declines and guardrails are deterministic and are not part of this sweep."""
+    if not db.q1("SELECT 1 AS x FROM eval_labels WHERE entity_type='claim' LIMIT 1"):
+        return {"status": "not_run", "reason": "run `scenarios` first"}
+    default_scale, runs = ai.COST_SCALE, {}
+    try:
+        for sc in scales:
+            ai.COST_SCALE = sc
+            runs[sc] = _run_scenarios()
+    finally:
+        ai.COST_SCALE = default_scale
+    table, mix_keys = {}, ["auto_approve", "refund_after_return", "request_evidence", "manual_review", "policy_decline"]
+    for sc, recs in runs.items():
+        row = _binary(recs, lambda r: r["decision"] != "auto_approve")
+        n = max(len(recs), 1)
+        row["action_mix"] = ", ".join(f"{a}={sum(r['decision'] == a for r in recs) / n:.0%}" for a in mix_keys if any(r["decision"] == a for r in recs))
+        row["manual_review_share"] = round(sum(r["decision"] == "manual_review" for r in recs) / n, 3)
+        table[f"x{sc}"] = row
+    feasible = [sc for sc in scales if table[f"x{sc}"]["false_positive_rate"] <= max_fpr]
+    if feasible:
+        best = max(feasible, key=lambda s: (table[f"x{s}"]["recall"], table[f"x{s}"]["precision"], s))
+        why = f"best recall among scales with false-positive rate <= {max_fpr}"
+    else:
+        best = min(scales, key=lambda s: table[f"x{s}"]["false_positive_rate"])
+        why = f"no scale reaches false-positive rate <= {max_fpr}; lowest false-positive rate shown"
+    # break-even claim amount: manual_review cheaper than auto_approve  <=>  amount * (r*(1-f_mr) - (1-r)*rate_mr) > scale * (handling + fixed friction)
+    be = {}
+    for r_ in (0.2, 0.4, 0.6, 0.8):
+        slope = r_ * (ai.EXPOSURE_FACTOR["auto_approve"] - ai.EXPOSURE_FACTOR["manual_review"]) - (1 - r_) * ai.FRICTION_RATE["manual_review"]
+        be[f"exposure risk {r_}"] = {f"x{sc}": (round(sc * (ai.HANDLING["manual_review"] + ai.FRICTION_FIXED["manual_review"]) / slope, 1) if slope > 0 else "never")
+                                      for sc in scales}
+    legit_amt = sorted(r["amount"] for r in runs[scales[0]] if not r["abusive"])
+    abus_amt = sorted(r["amount"] for r in runs[scales[0]] if r["abusive"])
+    return {"status": "run", "data": "SYNTHETIC labelled scenarios run through the real graph at each COST_SCALE (see docs/cost_calibration.md)",
+            "by_cost_scale": table,
+            "recommended_cost_scale": {"scale": best, "rule": why, **{k: table[f"x{best}"][k] for k in ("precision", "recall", "false_positive_rate", "action_mix")}},
+            "break_even_claim_amount_for_manual_review_vs_auto_approve": be,
+            "scenario_claim_amounts": {"abusive_median": _pct(abus_amt, .5), "legitimate_median": _pct(legit_amt, .5)},
+            "note": "Costs here are in the synthetic claims' currency units; choose COST_SCALE from the deployment's real claim sizes and review capacity, "
+                    "not from these synthetic labels alone. Exposure risk is the 0-1 proxy (0.6 CR + 0.4 BR)/100, so an abusive claim only changes the "
+                    "decision when amount x risk is large enough to beat the handling cost. A recall of 0 at x1.0 means 'every synthetic claim was too "
+                    "small to justify a 100-unit review at its risk', not that the detectors found nothing: see the pattern-flag classifier in "
+                    "component 4. Set COST_SCALE via the environment; defaults are unchanged."}
+
+
 def _prf(y_true, y_pred, labels):
     f1s = []
     for c in labels:
@@ -803,7 +960,14 @@ def _eval_label_file(path):
                      "unsupported-claim detection recall": round(inc_tp / max(inc_tp + inc_fn, 1), 3)}
     sent = [(ai.sentiment(r["text"])["label"], r["label_sentiment"]) for r in rows]
     neg = [(p, g) for p, g in sent if g == "negative"]
-    return {"n": len(rows), "labels": sorted(cats), "systems": out,
+    rule_fn = systems["rules (negation-aware, current default)"]
+    errors = {"sentiment_negative_missed": [{"id": r.get("id"), "text": r["text"], "predicted": p, "gold": g}
+                                            for r, (p, g) in zip(rows, sent) if g == "negative" and p != "negative"],
+              "sentiment_false_negative_alarms": [{"id": r.get("id"), "text": r["text"], "predicted": p, "gold": g}
+                                                  for r, (p, g) in zip(rows, sent) if p == "negative" and g != "negative"],
+              "category_errors_rules": [{"id": r.get("id"), "text": r["text"], "predicted": rule_fn(r["text"]), "gold": r["label_category"],
+                                         "tag": r.get("tag")} for r in rows if rule_fn(r["text"]) != r["label_category"]]}
+    return {"n": len(rows), "labels": sorted(cats), "systems": out, "errors": errors,
             "sentiment": {"backend": ai.sentiment("x y")["backend"], "accuracy_3class": round(sum(p == g for p, g in sent) / len(sent), 3),
                           "recall_of_negative": round(sum(p == "negative" for p, g in neg) / max(len(neg), 1), 3)}}
 
@@ -812,16 +976,22 @@ def eval_nlp(labels_path=None):
     """Claim NLP + sentiment on the hand-labelled set (shipped, authored by the developer) and on the team's real-review labels if present."""
     paths = {"developer-authored set": labels_path or os.path.join("data", "manual_claims_labelled.csv"),
              "team labels of real reviews": os.path.join("data", "manual_labels_real.csv")}
-    res, notes = {}, []
+    res, notes, errs = {}, [], {}
     for name, p in paths.items():
         if os.path.exists(p):
             r = _eval_label_file(p)
             res[name] = {"n": r["n"], **{f"{s} | {k}": v for s, d in r["systems"].items() for k, v in d.items()},
-                         **{f"sentiment | {k}": v for k, v in r["sentiment"].items()}}
+                         **{f"sentiment | {k}": v for k, v in r["sentiment"].items()},
+                         "sentiment | negative_reviews_missed": len(r["errors"]["sentiment_negative_missed"]),
+                         "sentiment | false_negative_alarms": len(r["errors"]["sentiment_false_negative_alarms"])}
+            errs[name] = r["errors"]
         else:
             notes.append(f"{name}: file {p} not found")
     if not res:
         return {"status": "not_run", "reason": "; ".join(notes)}
+    os.makedirs(REPORTS, exist_ok=True)       # misclassified examples for inspection (negative-review errors, category errors)
+    json.dump(errs, open(os.path.join(REPORTS, "nlp_error_analysis.json"), "w"), indent=2, ensure_ascii=False)
+    notes.append(f"misclassified examples are listed in {REPORTS}/nlp_error_analysis.json.")
     return {"status": "run", "data": "hand-labelled claim texts (see data/README.md for who labelled them)", "sets": res,
             "claim_nlp_backend_active": ai._NLP["backend"] if ai._text_classifier() else "rules (transformer not enabled / not loadable)",
             "note": "the developer-authored set is a regression/sanity set, not an independent benchmark (the same person wrote the rules). "
@@ -878,11 +1048,12 @@ def eval_amazon(image_dir=None):
     return out
 
 
-def evaluate(amazon_images=None):
+def evaluate(amazon_images=None, cost_scales=(1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01)):
     os.makedirs(REPORTS, exist_ok=True)
     results = {"generated_at": datetime.utcnow().isoformat(timespec="seconds"), "database": db.DB_URL.split("@")[-1],
                "gate_on_olist_orders": eval_gate_olist(), "behaviour_on_uci_returns": eval_behaviour_uci(),
-               "evidence_reuse_on_copydays": eval_copydays(), "abuse_scenarios_synthetic": eval_scenarios(),
+               "evidence_reuse_on_copydays": eval_copydays(), "evidence_reuse_copydays_validation_test_split": eval_copydays_split(),
+               "abuse_scenarios_synthetic": eval_scenarios(), "cost_calibration_synthetic": eval_cost_calibration(cost_scales),
                "claim_nlp_on_labelled_set": eval_nlp(), "olist_reviews_real_orders": eval_olist_reviews(),
                "amazon_text_proxy": eval_amazon(amazon_images)}
     json.dump(results, open(os.path.join(REPORTS, "eval_results.json"), "w"), indent=2, default=str)
@@ -902,7 +1073,9 @@ def write_eval_report(res):
     titles = {"gate_on_olist_orders": "1. Deterministic policy gate on real Olist orders",
               "behaviour_on_uci_returns": "2. Behavioural features / abuse rules on UCI return-like behaviour (unlabelled)",
               "evidence_reuse_on_copydays": "3. Evidence reuse detection on INRIA Copydays (source ground truth)",
+              "evidence_reuse_copydays_validation_test_split": "3b. Copydays: thresholds tuned on a validation split, reported on a held-out test split",
               "abuse_scenarios_synthetic": "4. Synthetic customers from independent behavioural profiles (SYNTHETIC labels)",
+              "cost_calibration_synthetic": "4b. Expected-cost layer: sweep over COST_SCALE (SYNTHETIC labels)",
               "claim_nlp_on_labelled_set": "5. Claim NLP + sentiment on the hand-labelled set",
               "olist_reviews_real_orders": "6. Olist reviews linked to real orders",
               "amazon_text_proxy": "7. Amazon Reviews 2023 text/rating proxy"}
@@ -944,6 +1117,25 @@ COMPONENT_SOURCES = [
 ]
 
 
+MISSING_CHECKS = [("customers", "created_at"), ("orders", "customer_id"), ("orders", "category"), ("orders", "vendor_id"), ("orders", "amount"),
+                  ("orders", "order_date"), ("orders", "delivered_at"), ("refund_history", "reason"), ("refund_history", "created_at"),
+                  ("source_reviews", "rating"), ("source_reviews", "review_text"), ("source_reviews", "product_ref")]
+SCHEMA_MAPPINGS = [
+    ("Olist customers.customer_unique_id", "customers.id", "one person across several customer_id values"),
+    ("Olist orders.order_id", "orders.id", ""),
+    ("Olist orders.order_purchase_timestamp / order_delivered_customer_date", "orders.order_date / orders.delivered_at", "missing delivery date stays NULL"),
+    ("Olist order_items.price (sum, freight excluded)", "orders.amount", ""),
+    ("Olist order_items.seller_id / product_id (first item)", "orders.vendor_id / orders.product_id", ""),
+    ("Olist products.product_category_name (+ English translation)", "orders.category", "missing -> 'unknown'"),
+    ("Olist order_reviews.order_id / review_score / review_comment_message", "source_reviews.product_ref / rating / review_text", "only reviews whose order was loaded"),
+    ("UCI Invoice (normal)", "orders.id (status 'invoiced')", ""),
+    ("UCI Invoice starting with 'C'", "refund_history (status 'cancellation_proxy') + pseudo-order", "NOT a confirmed refund, NOT fraud"),
+    ("UCI Customer ID / InvoiceDate / Price x Quantity", "customers.id / order_date / amount", ""),
+    ("Amazon rating / title / text / images", "source_reviews.rating / title / review_text / image_urls", "reviews, not refund claims; images not evidence"),
+    ("Copydays originals + variants", "(not loaded; read from disk)", "ground truth = file-stem pairing"),
+]
+
+
 def write_manifest():
     os.makedirs(DOCS, exist_ok=True)
     log = load_log()
@@ -963,16 +1155,44 @@ def write_manifest():
                   "ORDER BY source, table_name")
     L.append("\n## Rows in the unified schema (by provenance)\n\n| source | table | label_origin | rows |\n|---|---|---|---|")
     L += [f"| {c['source']} | {c['table_name']} | {c['label_origin']} | {c['n']} |" for c in counts]
+    L.append("\n## Missing-value checks in the unified schema (actual rows loaded)\n\n| table.column | rows | NULL / empty | share |\n|---|---|---|---|")
+    for table, col in MISSING_CHECKS:
+        try:
+            r = db.q1(f"SELECT COUNT(*) AS n, SUM(CASE WHEN {col} IS NULL OR TRIM(CAST({col} AS TEXT))='' THEN 1 ELSE 0 END) AS m FROM {table}")
+            n, m = int(r["n"] or 0), int(r["m"] or 0)
+            L.append(f"| {table}.{col} | {n} | {m} | {m / n:.1%} |" if n else f"| {table}.{col} | 0 | - | - |")
+        except Exception as e:  # noqa: BLE001 - a missing table must not break the manifest
+            L.append(f"| {table}.{col} | check failed | {type(e).__name__} | - |")
+    L.append("\n## Source-to-schema mapping\n\n| source field | unified column | note |\n|---|---|---|")
+    L += [f"| {a} | {b} | {c} |" for a, b, c in SCHEMA_MAPPINGS]
+    rec = os.path.join("data", "raw", "download_record.json")
+    L.append("\n## Download record (written by `scripts/get_datasets.py`)\n")
+    if os.path.exists(rec):
+        L.append("| source | file | bytes | SHA-256 | downloaded (UTC) | URL |\n|---|---|---|---|---|---|")
+        for d in json.load(open(rec)):
+            L.append(f"| {d.get('source')} | {d.get('file')} | {d.get('bytes')} | `{d.get('sha256')}` | {d.get('downloaded_at')} | {d.get('url')} |")
+    else:
+        L.append("No download record found (`data/raw/download_record.json`).")
     L.append("\n## Source supporting each evaluation component\n\n| component | data |\n|---|---|")
     L += [f"| {a} | {b} |" for a, b in COMPONENT_SOURCES]
     open(os.path.join(DOCS, "dataset_manifest.md"), "w").write("\n".join(L) + "\n")
 
 
-def write_labelling_sheet(n=200, seed=7, path=os.path.join("data", "manual_label_sheet.csv")):
-    """Random real reviews (Olist + Amazon) with BLANK label columns, for two teammates to label -> data/manual_labels_real.csv."""
+def write_labelling_sheet(n=200, seed=7, path=os.path.join("data", "manual_label_sheet.csv"), source=None, low_share=0.0):
+    """Random real reviews with BLANK label columns, for two teammates to label -> data/manual_labels_real.csv.
+    source: restrict to one source (e.g. 'amazon_reviews_2023' = English; Olist text is Portuguese). low_share: fraction of the sheet drawn from
+    1-2 star reviews - a plain random sample is ~85 % praise and contains almost no complaints, which is what the claim NLP must be tested on."""
     import csv
-    rows = db.q("SELECT id, source, review_text, rating FROM source_reviews WHERE review_text IS NOT NULL AND TRIM(review_text) <> ''")
-    random.Random(seed).shuffle(rows)
+    sql = "SELECT id, source, review_text, rating FROM source_reviews WHERE review_text IS NOT NULL AND TRIM(review_text) <> ''"
+    rows = db.q(sql + (" AND source=:s" if source else ""), **({"s": source} if source else {}))
+    rnd = random.Random(seed)
+    rnd.shuffle(rows)
+    if low_share > 0:
+        low = [r for r in rows if r["rating"] is not None and r["rating"] <= 2]
+        rest = [r for r in rows if not (r["rating"] is not None and r["rating"] <= 2)]
+        k = min(len(low), int(n * low_share))
+        rows = low[:k] + rest[:max(n - k, 0)]
+        rnd.shuffle(rows)          # annotators must not see the complaints grouped together
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
@@ -992,6 +1212,9 @@ def cli(argv=None):
     ap.add_argument("--olist-limit", type=int, default=20000), ap.add_argument("--uci-customers", type=int, default=3000)
     ap.add_argument("--amazon-limit", type=int, default=5000), ap.add_argument("--n", type=int, default=40, help="synthetic customers per profile (scenarios) / rows (labelling-sheet)")
     ap.add_argument("--seed", type=int, default=7), ap.add_argument("--amazon-images")
+    ap.add_argument("--label-source", default="amazon_reviews_2023", help="labelling-sheet: source to sample ('olist' = Portuguese, 'all' = both)")
+    ap.add_argument("--low-share", type=float, default=0.5, help="labelling-sheet: share of 1-2 star reviews (complaints) in the sheet")
+    ap.add_argument("--cost-scales", default="1,0.5,0.2,0.1,0.05,0.02,0.01", help="COST_SCALE values for the cost sweep (each one re-runs every synthetic claim)")
     a = ap.parse_args(argv)
     db.init()
     if a.cmd in ("ingest", "all"):
@@ -1006,11 +1229,11 @@ def cli(argv=None):
     if a.cmd in ("scenarios", "all"):
         print("scenarios:", generate_scenarios(a.n, a.seed)["synthetic_rows"])
     if a.cmd == "labelling-sheet":
-        print("wrote", write_labelling_sheet(a.n, a.seed))
+        print("wrote", write_labelling_sheet(a.n, a.seed, source=None if a.label_source == "all" else a.label_source, low_share=a.low_share))
     if a.cmd == "fetch-amazon-images":
         print("downloaded", fetch_amazon_images(a.n), "images")
     if a.cmd in ("evaluate", "all"):
-        r = evaluate(a.amazon_images)
+        r = evaluate(a.amazon_images, tuple(float(x) for x in a.cost_scales.split(",")))
         print({k: (v["status"] if isinstance(v, dict) and "status" in v else v) for k, v in r.items()})
         print(f"wrote {REPORTS}/eval_results.json and {DOCS}/eval_report.md")
     if a.cmd in ("manifest", "all"):
