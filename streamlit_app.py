@@ -23,6 +23,30 @@ FRIENDLY = {"refunded": "Approved - your refund has been issued.",
 
 st.set_page_config(page_title="Refund Intelligence", layout="wide")
 
+st.markdown("""<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+html, body, [class*="css"] { font-family: 'Inter', system-ui, sans-serif; }
+.block-container { padding-top: 2.2rem; max-width: 1280px; }
+h1, h2, h3 { letter-spacing: -0.02em; font-weight: 650; }
+h2 { padding-bottom: .35rem; border-bottom: 1px solid rgba(128,128,160,.25); }
+section[data-testid="stSidebar"] { background: linear-gradient(180deg, #14122b 0%, #1d1a3f 100%); }
+section[data-testid="stSidebar"] * { color: #e9e7ff !important; }
+div[data-testid="stForm"], div[data-testid="stMetric"] {
+  border: 1px solid rgba(128,128,160,.28); border-radius: 14px; padding: 1.1rem 1.2rem;
+  background: rgba(124,92,255,.04); box-shadow: 0 6px 24px rgba(20,18,43,.06); }
+div[data-testid="stMetricValue"] { font-weight: 700; color: #6c4cf5; }
+.stButton > button, div[data-testid="stFormSubmitButton"] > button {
+  border-radius: 10px; border: 0; padding: .55rem 1.3rem; font-weight: 600; color: #fff;
+  background: linear-gradient(135deg, #6c4cf5 0%, #9b5cf6 100%); box-shadow: 0 4px 14px rgba(108,76,245,.35);
+  transition: transform .12s ease, box-shadow .12s ease; }
+.stButton > button:hover, div[data-testid="stFormSubmitButton"] > button:hover {
+  transform: translateY(-1px); box-shadow: 0 8px 20px rgba(108,76,245,.42); color: #fff; }
+div[data-testid="stDataFrame"], div[data-testid="stExpander"] { border-radius: 12px; overflow: hidden; }
+div[data-testid="stAlert"] { border-radius: 12px; }
+#MainMenu, footer { visibility: hidden; }
+</style>""", unsafe_allow_html=True)
+
+
 
 def api(method, path, **kw):
     try:

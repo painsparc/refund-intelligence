@@ -21,7 +21,7 @@ import json
 from contextlib import asynccontextmanager
 from typing import Optional
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 import db
 import intelligence as ai
@@ -36,6 +36,12 @@ async def lifespan(_):
 
 
 app = FastAPI(title="Intelligent Refund Risk & Resolution Platform", lifespan=lifespan)
+
+
+@app.get("/", include_in_schema=False)
+def root():
+    """The backend has no page of its own: send browsers to the API docs (the UI is Streamlit on :8501)."""
+    return RedirectResponse("/docs")
 
 
 @app.post("/claims")
